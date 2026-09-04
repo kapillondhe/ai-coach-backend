@@ -9,7 +9,7 @@ dependencies = [
     "pydantic-settings==2.13.0",
     "python-dotenv==1.2.1",
     "httpx==0.28.1",
-    "pydantic-ai-slim[anthropic,mcp]==2.37.0",
+    "pydantic-ai-slim[openai,mcp]==2.37.0",
 ]
 
 [project.optional-dependencies]
