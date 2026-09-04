@@ -1,6 +1,8 @@
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from openinference.semconv.trace import SpanAttributes
+from opentelemetry import trace
 from pydantic import BaseModel
 from pydantic_ai import Agent
 
@@ -13,6 +15,7 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 
 class ChatRequest(BaseModel):
     message: str
+    session_id: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -21,6 +24,9 @@ class ChatResponse(BaseModel):
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, agent: Agent = Depends(get_coach_agent)) -> ChatResponse:
+    if request.session_id:
+        trace.get_current_span().set_attribute(SpanAttributes.SESSION_ID, request.session_id)
+
     try:
         result = await agent.run(request.message)
     except Exception:

@@ -10,6 +10,10 @@ dependencies = [
     "python-dotenv==1.2.1",
     "httpx==0.28.1",
     "pydantic-ai-slim[openai,mcp]==2.37.0",
+    "arize-phoenix-otel==0.17.1",
+    "openinference-instrumentation-pydantic-ai==0.1.24",
+    "openinference-semantic-conventions==0.1.34",
+    "opentelemetry-instrumentation-fastapi==0.65b0",
 ]
 
 [project.optional-dependencies]

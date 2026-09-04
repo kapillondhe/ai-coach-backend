@@ -9,3 +9,9 @@ pytest==9.0.1
 # Backend Pydantic AI agent (app/agents/) - OpenRouter model (OpenAI-compatible client) + MCP client toolset,
 # talks to the MCP server (see https://github.com/kapillondhe/ai-coach-mcp-server) over HTTP
 pydantic-ai-slim[openai,mcp]==2.37.0
+
+# Tracing (app/core/telemetry.py) - exports to Arize Phoenix; no-ops when PHOENIX_API_KEY is unset
+arize-phoenix-otel==0.17.1
+openinference-instrumentation-pydantic-ai==0.1.24
+openinference-semantic-conventions==0.1.34
+opentelemetry-instrumentation-fastapi==0.65b0

@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = None
     openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
+    phoenix_api_key: str | None = None
+    phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"
+    phoenix_project_name: str = "ai-coach"
+    otel_service_name: str = "ai-coach-backend"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
