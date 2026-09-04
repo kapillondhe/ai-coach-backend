@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
 
     # MCP server (https://github.com/kapillondhe/ai-coach-mcp-server) that the coach agent calls as a tool provider.
-    mcp_server_url: str = "https://ai-coach-mcp-server-production.up.railway.app/mcp"
+    mcp_server_url: str
     mcp_auth_token: str | None = None
 
     anthropic_api_key: str | None = None
