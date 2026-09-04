@@ -17,8 +17,8 @@ class Settings(BaseSettings):
     mcp_server_url: str
     mcp_auth_token: str | None = None
 
-    anthropic_api_key: str | None = None
-    anthropic_model: str = "claude-sonnet-5"
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
     @property
     def cors_origin_list(self) -> list[str]:

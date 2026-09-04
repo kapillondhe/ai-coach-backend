@@ -2,8 +2,8 @@ from functools import lru_cache
 
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.providers.openrouter import OpenRouterProvider
 
 from app.core.config import get_settings
 
@@ -17,9 +17,9 @@ SYSTEM_PROMPT = (
 def get_coach_agent() -> Agent:
     settings = get_settings()
 
-    model = AnthropicModel(
-        settings.anthropic_model,
-        provider=AnthropicProvider(api_key=settings.anthropic_api_key),
+    model = OpenRouterModel(
+        settings.openrouter_model,
+        provider=OpenRouterProvider(api_key=settings.openrouter_api_key),
     )
     mcp_toolset = MCPToolset(
         client=settings.mcp_server_url,

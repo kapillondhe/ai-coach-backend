@@ -6,6 +6,6 @@ python-dotenv==1.2.1
 httpx==0.28.1
 pytest==9.0.1
 
-# Backend Pydantic AI agent (app/agents/) - Anthropic model + MCP client toolset,
+# Backend Pydantic AI agent (app/agents/) - OpenRouter model (OpenAI-compatible client) + MCP client toolset,
 # talks to the MCP server (see https://github.com/kapillondhe/ai-coach-mcp-server) over HTTP
-pydantic-ai-slim[anthropic,mcp]==2.37.0
+pydantic-ai-slim[openai,mcp]==2.37.0
