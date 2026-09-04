@@ -1,7 +1,11 @@
-fastapi==0.121.2
+fastapi==0.141.1
 uvicorn[standard]==0.40.0
 pydantic==2.12.4
 pydantic-settings==2.13.0
 python-dotenv==1.2.1
 httpx==0.28.1
 pytest==9.0.1
+
+# Backend Pydantic AI agent (app/agents/) - Anthropic model + MCP client toolset,
+# talks to the MCP server (see https://github.com/kapillondhe/ai-coach-mcp-server) over HTTP
+pydantic-ai-slim[anthropic,mcp]==2.37.0

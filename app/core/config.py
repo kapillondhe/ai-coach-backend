@@ -13,6 +13,13 @@ class Settings(BaseSettings):
     # Comma-separated list of origins allowed to call the API.
     cors_origins: str = "http://localhost:3000"
 
+    # MCP server (https://github.com/kapillondhe/ai-coach-mcp-server) that the coach agent calls as a tool provider.
+    mcp_server_url: str = "https://ai-coach-mcp-server-production.up.railway.app/mcp"
+    mcp_auth_token: str | None = None
+
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-sonnet-5"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
