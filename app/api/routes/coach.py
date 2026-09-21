@@ -33,9 +33,9 @@ async def chat(request: ChatRequest, agent: Agent = Depends(get_coach_agent)) ->
 
     try:
         result = await agent.run(request.message)
-    except Exception:
+    except Exception as exc:
         logger.exception("Coach agent failed to produce a reply")
-        raise HTTPException(status_code=502, detail=_AGENT_UNAVAILABLE_DETAIL)
+        raise HTTPException(status_code=502, detail=_AGENT_UNAVAILABLE_DETAIL) from exc
     return ChatResponse(reply=result.output)
 
 

@@ -10,10 +10,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
 
-    # Comma-separated list of origins allowed to call the API.
     cors_origins: str = "http://localhost:3000"
 
-    # MCP server (https://github.com/kapillondhe/ai-coach-mcp-server) that the coach agent calls as a tool provider.
     mcp_server_url: str
     mcp_auth_token: str | None = None
 
@@ -24,6 +22,23 @@ class Settings(BaseSettings):
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"
     phoenix_project_name: str = "ai-coach"
     otel_service_name: str = "ai-coach-backend"
+
+    database_url: str
+
+    token_encryption_key: str | None = None
+
+
+    coros_mcp_server_url: str = "https://mcp.coros.com/mcp"
+    coros_redirect_uri: str = "http://localhost:8000/api/integrations/coros/callback"
+
+    
+    frontend_url: str = "http://localhost:3000"
+
+
+    supabase_url: str | None = None
+
+
+    supabase_jwt_audience: str = "authenticated"
 
     @property
     def cors_origin_list(self) -> list[str]:

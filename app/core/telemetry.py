@@ -13,8 +13,7 @@ from app.core.config import get_settings
 
 
 def setup_telemetry(app: FastAPI) -> None:
-    """Wire up tracing to Arize Phoenix. No-ops if PHOENIX_API_KEY is unset, so local dev
-    and tests behave exactly as they do without Phoenix configured."""
+    """Wire up tracing to Arize Phoenix. No-op if PHOENIX_API_KEY is unset."""
     settings = get_settings()
     if not settings.phoenix_api_key:
         return
