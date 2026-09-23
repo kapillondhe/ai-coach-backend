@@ -1,7 +1,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, TypeDecorator
+from sqlalchemy import JSON, DateTime, TypeDecorator
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -54,4 +54,16 @@ class UserIntegration(Base):
     scope: Mapped[str | None]
     expires_at: Mapped[datetime | None] = mapped_column(_UTCDateTime)
     connected_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+
+
+class Profile(Base):
+    __tablename__ = "profiles"
+
+    user_id: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str | None]
+    weight_kg: Mapped[float | None]
+    injury_notes: Mapped[str | None]
+    field_sources: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(_UTCDateTime)
