@@ -67,3 +67,23 @@ class Profile(Base):
     field_sources: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(_UTCDateTime)
     updated_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    user_id: Mapped[str]
+    title: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+    updated_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    conversation_id: Mapped[str]
+    role: Mapped[str]
+    content: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime)

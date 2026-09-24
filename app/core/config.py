@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     mcp_auth_token: str | None = None
 
     openrouter_api_key: str | None = None
-    openrouter_model: str = "nvidia/nemotron-3.5-lightning:free"
+    openrouter_model: str = "z-ai/glm-5.3-flash"
 
     phoenix_api_key: str | None = None
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"
