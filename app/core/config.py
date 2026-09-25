@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     coros_mcp_server_url: str = "https://mcp.coros.com/mcp"
     coros_redirect_uri: str = "http://localhost:8000/api/integrations/coros/callback"
 
-    
+    internal_sync_secret: str | None = None
+
     frontend_url: str = "http://localhost:3000"
 
 

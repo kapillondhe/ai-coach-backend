@@ -1,11 +1,11 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
 from app.core.auth import require_user_id
 from app.core.config import get_settings
-from app.services import coros_oauth
+from app.services import coros_oauth, coros_sync
 from app.services.coros_oauth import CorosOAuthError
 
 logger = logging.getLogger(__name__)
@@ -24,20 +24,27 @@ async def coros_connect(user_id: str = Depends(require_user_id)) -> dict[str, st
 
 
 @router.get("/coros/callback")
-async def coros_callback(code: str, state: str) -> RedirectResponse:
+async def coros_callback(code: str, state: str, background_tasks: BackgroundTasks) -> RedirectResponse:
     settings = get_settings()
     try:
-        await coros_oauth.handle_callback(code, state)
+        user_id = await coros_oauth.handle_callback(code, state)
     except CorosOAuthError:
         logger.exception("COROS OAuth callback failed")
         return RedirectResponse(url=f"{settings.frontend_url}/profile?coros=error")
+    background_tasks.add_task(coros_sync.backfill_user, user_id)
     return RedirectResponse(url=f"{settings.frontend_url}/profile?coros=connected")
 
 
 @router.get("/coros/status")
 async def coros_status(user_id: str = Depends(require_user_id)) -> dict[str, object]:
     status = await coros_oauth.get_status(user_id)
-    return {"connected": status.connected, "connected_at": status.connected_at}
+    sync_status = await coros_sync.get_sync_status(user_id) if status.connected else None
+    return {
+        "connected": status.connected,
+        "connected_at": status.connected_at,
+        "syncing": sync_status.last_backfill_completed_at is None if sync_status else status.connected,
+        "last_synced_at": sync_status.last_synced_at if sync_status else None,
+    }
 
 
 @router.post("/coros/disconnect")

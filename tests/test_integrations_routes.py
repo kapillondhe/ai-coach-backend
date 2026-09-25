@@ -105,6 +105,11 @@ def test_status_connected(monkeypatch):
         "get_status",
         AsyncMock(return_value=ConnectionStatus(connected=True, connected_at=connected_at)),
     )
+    monkeypatch.setattr(
+        integrations_routes.coros_sync,
+        "get_sync_status",
+        AsyncMock(return_value=None),
+    )
     from fastapi.testclient import TestClient
 
     client = TestClient(app)
