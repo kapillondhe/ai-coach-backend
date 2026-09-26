@@ -35,6 +35,25 @@ class _FakeConversationSession:
                     row[key] = val
             return SimpleNamespace(first=lambda: None)
 
+        if compiled_type == "Delete":
+            table = stmt.table.name
+            params = stmt.compile().params
+            str_params = [v for v in params.values() if isinstance(v, str)]
+
+            if table == "conversations":
+                matches = [c for c in self.conversations.values() if all(v in c.values() for v in str_params)]
+                for c in matches:
+                    del self.conversations[c["id"]]
+                return SimpleNamespace(rowcount=len(matches))
+
+            if table == "conversation_messages":
+                (conversation_id,) = str_params
+                removed = len(self.messages.get(conversation_id, []))
+                self.messages.pop(conversation_id, None)
+                return SimpleNamespace(rowcount=removed)
+
+            raise AssertionError(f"Unhandled delete table: {table}")
+
         if compiled_type == "Select":
             table_name = stmt.get_final_froms()[0].name
             params = stmt.compile().params
@@ -148,3 +167,35 @@ async def test_list_conversations_scoped_to_user(store):
     summaries = await conversation_service.list_conversations("user-1")
 
     assert [s.id for s in summaries] == [conv_a]
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_removes_conversation_and_messages(store):
+    conversation_id = await conversation_service.create_conversation("user-1")
+    await conversation_service.append_messages(
+        conversation_id, "user-1", [MessageData(role="user", content="hi")]
+    )
+
+    deleted = await conversation_service.delete_conversation(conversation_id, "user-1")
+
+    assert deleted is True
+    assert conversation_id not in store["conversations"]
+    with pytest.raises(ConversationNotFoundError):
+        await conversation_service.get_conversation(conversation_id, "user-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_returns_false_for_wrong_user(store):
+    conversation_id = await conversation_service.create_conversation("user-1")
+
+    deleted = await conversation_service.delete_conversation(conversation_id, "user-2")
+
+    assert deleted is False
+    assert conversation_id in store["conversations"]
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_returns_false_for_unknown_id(store):
+    deleted = await conversation_service.delete_conversation(str(uuid.uuid4()), "user-1")
+
+    assert deleted is False

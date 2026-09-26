@@ -137,6 +137,15 @@ class SyncedDailyMetric(Base):
     synced_at: Mapped[datetime] = mapped_column(_UTCDateTime)
 
 
+class UserMemory(Base):
+    __tablename__ = "user_memories"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    user_id: Mapped[str]
+    content: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(_UTCDateTime)
+
+
 class SyncedSnapshot(Base):
     __tablename__ = "synced_snapshots"
 

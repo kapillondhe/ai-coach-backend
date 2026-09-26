@@ -69,3 +69,23 @@ def test_conversations_routes_require_sign_in_without_dependency_override():
 
     assert client.get("/api/conversations").status_code == 401
     assert client.get("/api/conversations/conv-1").status_code == 401
+    assert client.delete("/api/conversations/conv-1").status_code == 401
+
+
+def test_delete_conversation_returns_deleted(monkeypatch):
+    monkeypatch.setattr(conversation_service, "delete_conversation", AsyncMock(return_value=True))
+
+    client = TestClient(app)
+    response = client.delete("/api/conversations/conv-1")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+
+
+def test_delete_conversation_returns_404_when_not_found(monkeypatch):
+    monkeypatch.setattr(conversation_service, "delete_conversation", AsyncMock(return_value=False))
+
+    client = TestClient(app)
+    response = client.delete("/api/conversations/conv-1")
+
+    assert response.status_code == 404

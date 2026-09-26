@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents.coach_agent import _base_toolset
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.core.db import close_engine
@@ -14,8 +15,11 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    yield
-    await close_engine()
+    async with _base_toolset():
+        try:
+            yield
+        finally:
+            await close_engine()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

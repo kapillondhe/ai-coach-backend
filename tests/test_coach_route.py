@@ -3,8 +3,38 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from app.agents.coach_agent import get_coach_agent
+from app.api.routes import coach as coach_routes
 from app.core.auth import get_current_user_id
 from app.main import app
+from app.services.chat_opener import ChatOpener
+
+
+def test_opener_anonymous(monkeypatch):
+    monkeypatch.setattr(
+        coach_routes.chat_opener_service,
+        "get_chat_opener",
+        AsyncMock(return_value=ChatOpener(text="What are you training for?", chips=["a", "b"])),
+    )
+    client = TestClient(app)
+    response = client.get("/api/coach/opener")
+
+    assert response.status_code == 200
+    assert response.json() == {"text": "What are you training for?", "chips": ["a", "b"]}
+
+
+def test_opener_signed_in_passes_user_id(monkeypatch):
+    mock_get_opener = AsyncMock(return_value=ChatOpener(text="Nice ride.", chips=[]))
+    monkeypatch.setattr(coach_routes.chat_opener_service, "get_chat_opener", mock_get_opener)
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        response = client.get("/api/coach/opener")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "Nice ride."
+    mock_get_opener.assert_awaited_once_with("user-123")
 
 
 class _FakeResult:

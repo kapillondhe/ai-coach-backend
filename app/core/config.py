@@ -16,7 +16,11 @@ class Settings(BaseSettings):
     mcp_auth_token: str | None = None
 
     openrouter_api_key: str | None = None
-    openrouter_model: str = "z-ai/glm-5.3-flash"
+    # Tier 1: main coach conversation — tool-calling + tone-sensitive (incl. injury/physio advice).
+    openrouter_model: str = "google/gemini-2.5-flash"
+    # Tier 2: cheap utility model for lightweight tasks (currently: conversation titling
+    # in app.services.titling; also suited to future summarization/classification work).
+    openrouter_utility_model: str = "z-ai/glm-5.3-flash"
 
     phoenix_api_key: str | None = None
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"

@@ -3,7 +3,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import delete, insert, select, update
 
 from app.core.db import get_session
 from app.core.models import Conversation, ConversationMessage
@@ -114,6 +114,30 @@ async def append_messages(conversation_id: str, user_id: str, messages: list[Mes
             update(Conversation).where(Conversation.id == conversation_id).values(updated_at=now)
         )
         await session.commit()
+
+
+async def set_title(conversation_id: str, user_id: str, title: str) -> None:
+    async with get_session() as session:
+        await session.execute(
+            update(Conversation)
+            .where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+            .values(title=title)
+        )
+        await session.commit()
+
+
+async def delete_conversation(conversation_id: str, user_id: str) -> bool:
+    async with get_session() as session:
+        result = await session.execute(
+            delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+        )
+        deleted = result.rowcount > 0
+        if deleted:
+            await session.execute(
+                delete(ConversationMessage).where(ConversationMessage.conversation_id == conversation_id)
+            )
+        await session.commit()
+    return deleted
 
 
 async def list_conversations(user_id: str) -> list[ConversationSummary]:

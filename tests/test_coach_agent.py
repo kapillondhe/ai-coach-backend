@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.agents import coach_agent
+from app.services.memory import MemoryData
 
 
 @pytest.mark.asyncio
@@ -66,6 +67,96 @@ async def test_get_coach_agent_resolves_current_user_via_dependency_default(monk
     agent = await coach_agent.get_coach_agent(user_id=resolved_user_id)
 
     assert len(agent.toolsets) == 3  # pydantic-ai internal function toolset + base + COROS
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_anonymous_returns_base_prompt():
+    prompt = await coach_agent._build_system_prompt(user_id=None)
+    assert prompt == coach_agent.SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_signed_in_no_memories_returns_base_prompt(monkeypatch):
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert prompt == coach_agent.SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_signed_in_injects_stored_memories(monkeypatch):
+    memories = [
+        MemoryData(id="m1", content="Training for a first 70.3", created_at=None),
+        MemoryData(id="m2", content="Has a history of runner's knee", created_at=None),
+    ]
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=memories))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert "Training for a first 70.3" in prompt
+    assert "Has a history of runner's knee" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_degrades_gracefully_on_memory_lookup_failure(monkeypatch):
+    monkeypatch.setattr(
+        coach_agent.memory_service, "list_memories", AsyncMock(side_effect=RuntimeError("DB is down"))
+    )
+
+    # Must not raise — a memory-store failure can never break core chat.
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert prompt == coach_agent.SYSTEM_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_get_coach_agent_anonymous_has_no_remember_tool(monkeypatch):
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+
+    agent = await coach_agent.get_coach_agent(user_id=None)
+
+    assert "remember" not in agent.toolsets[0].tools
+
+
+@pytest.mark.asyncio
+async def test_get_coach_agent_signed_in_has_remember_tool(monkeypatch):
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+
+    assert "remember" in agent.toolsets[0].tools
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_has_description_for_the_model(monkeypatch):
+    # Regression test: @agent.tool_plain reads the function's docstring at decoration
+    # time, so assigning __doc__ afterward is a no-op and leaves the model with no
+    # guidance on when to call the tool.
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+    remember_tool = agent.toolsets[0].tools["remember"]
+
+    assert remember_tool.description == coach_agent._MEMORY_TOOL_DESCRIPTION
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_persists_fact_for_the_requesting_user(monkeypatch):
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    remember_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.memory_service, "remember", remember_mock)
+
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+    remember_tool = agent.toolsets[0].tools["remember"]
+
+    result = await remember_tool.function("Training for a first 70.3")
+
+    assert result == "Noted."
+    remember_mock.assert_awaited_once_with("user-123", "Training for a first 70.3")
 
 
 def test_chat_route_resolves_user_id_through_real_dependency_chain(monkeypatch):

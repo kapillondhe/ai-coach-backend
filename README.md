@@ -25,8 +25,10 @@ python -m mcp_server
 uvicorn app.main:app --reload --port 8000
 ```
 
-Set `OPENROUTER_API_KEY` in `.env` for the coach agent to actually run (see `.env.example`;
-`OPENROUTER_MODEL` defaults to `nvidia/nemotron-3.5-lightning:free`).
+Set `OPENROUTER_API_KEY` in `.env` for the coach agent to actually run (see `.env.example`).
+`OPENROUTER_MODEL` defaults to `google/gemini-2.5-flash` for the main coach conversation;
+`OPENROUTER_UTILITY_MODEL` defaults to `z-ai/glm-5.3-flash`, a cheaper model used for
+lightweight tasks like conversation titling.
 `MCP_SERVER_URL` (default `http://localhost:8100/mcp`) points the agent at the MCP server.
 
 - API root: http://localhost:8000
