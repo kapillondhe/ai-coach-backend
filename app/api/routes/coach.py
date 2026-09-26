@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-from app.agents.coach_agent import get_coach_agent
+from app.agents.coach_agent import CoachReply, get_coach_agent
 from app.core.auth import get_current_user_id
 from app.services import chat_opener as chat_opener_service
 from app.services import conversation as conversation_service
@@ -49,6 +49,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: str | None = None
+    suggestions: list[str] = []
 
 
 def _turns_to_message_history(turns: list[tuple[str, str]]) -> list[ModelMessage]:
@@ -98,7 +99,7 @@ async def _persist_turn(
 async def chat(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    agent: Agent = Depends(get_coach_agent),
+    agent: Agent[None, CoachReply] = Depends(get_coach_agent),
     user_id: str | None = Depends(get_current_user_id),
 ) -> ChatResponse:
     if request.session_id:
@@ -112,19 +113,22 @@ async def chat(
         logger.exception("Coach agent failed to produce a reply")
         raise HTTPException(status_code=502, detail=_AGENT_UNAVAILABLE_DETAIL) from exc
 
-    await _persist_turn(user_id, conversation_id, request.message, result.output)
+    reply = result.output.reply
+    suggestions = result.output.suggestions
+
+    await _persist_turn(user_id, conversation_id, request.message, reply)
     if is_new_conversation and user_id is not None and conversation_id is not None:
         background_tasks.add_task(
             titling_service.generate_and_set_title, conversation_id, user_id, request.message
         )
-    return ChatResponse(reply=result.output, conversation_id=conversation_id)
+    return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=suggestions)
 
 
 @router.post("/chat/stream")
 async def chat_stream(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
-    agent: Agent = Depends(get_coach_agent),
+    agent: Agent[None, CoachReply] = Depends(get_coach_agent),
     user_id: str | None = Depends(get_current_user_id),
 ) -> StreamingResponse:
     if request.session_id:
@@ -133,19 +137,31 @@ async def chat_stream(
     message_history, conversation_id, is_new_conversation = await _resolve_context(request, user_id)
 
     async def event_generator():
-        chunks: list[str] = []
+        sent_so_far = ""
+        suggestions: list[str] = []
         try:
             if conversation_id:
                 yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id})}\n\n"
             async with agent.run_stream(request.message, message_history=message_history) as result:
-                async for delta in result.stream_text(delta=True):
-                    chunks.append(delta)
+                async for partial in result.stream_output(debounce_by=0.1):
+                    reply_so_far = partial.reply if partial.reply else ""
+                    if len(reply_so_far) > len(sent_so_far):
+                        delta = reply_so_far[len(sent_so_far):]
+                        sent_so_far = reply_so_far
+                        yield f"data: {json.dumps({'delta': delta})}\n\n"
+                final_output = await result.get_output()
+                suggestions = final_output.suggestions
+                if len(final_output.reply) > len(sent_so_far):
+                    delta = final_output.reply[len(sent_so_far):]
+                    sent_so_far = final_output.reply
                     yield f"data: {json.dumps({'delta': delta})}\n\n"
-            await _persist_turn(user_id, conversation_id, request.message, "".join(chunks))
+            await _persist_turn(user_id, conversation_id, request.message, sent_so_far)
             if is_new_conversation and user_id is not None and conversation_id is not None:
                 background_tasks.add_task(
                     titling_service.generate_and_set_title, conversation_id, user_id, request.message
                 )
+            if suggestions:
+                yield f"event: suggestions\ndata: {json.dumps({'suggestions': suggestions})}\n\n"
             yield "event: done\ndata: {}\n\n"
         except Exception:
             logger.exception("Coach agent failed to stream a reply")

@@ -2,6 +2,7 @@ import logging
 from functools import lru_cache
 
 from fastapi import Depends
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openrouter import OpenRouterModel
@@ -17,8 +18,20 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an encouraging, knowledgeable fitness coach. Use the available "
-    "tools to log and look up a user's workouts before giving advice."
+    "tools to log and look up a user's workouts before giving advice.\n\n"
+    "After writing your reply, also fill in `suggestions`: 0 to 3 short "
+    "(under ~8 words), first-person follow-up messages the user might "
+    "plausibly send next, phrased as if the user were typing them (e.g. "
+    "\"How much protein do I need?\"), directly relevant to what was just "
+    "discussed. Leave it empty if nothing natural fits — don't force it."
 )
+
+
+class CoachReply(BaseModel):
+    """Structured output for a coach turn: the reply plus optional follow-up suggestions."""
+
+    reply: str
+    suggestions: list[str] = Field(default_factory=list, max_length=3)
 
 _MEMORY_TOOL_DESCRIPTION = (
     "Record a short, durable fact or preference the signed-in user just stated "
@@ -101,10 +114,11 @@ async def _build_system_prompt(user_id: str | None) -> str:
     return prompt
 
 
-async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) -> Agent:
+async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) -> Agent[None, CoachReply]:
     """Build a coach Agent for this request; not cached since attached toolsets depend on the user."""
     agent = Agent(
         model=_get_model(),
+        output_type=CoachReply,
         toolsets=await _build_toolsets(user_id),
         system_prompt=await _build_system_prompt(user_id),
     )

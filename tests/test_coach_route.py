@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
+from app.agents import coach_agent
 from app.agents.coach_agent import get_coach_agent
 from app.api.routes import coach as coach_routes
 from app.core.auth import get_current_user_id
@@ -38,25 +39,32 @@ def test_opener_signed_in_passes_user_id(monkeypatch):
 
 
 class _FakeResult:
-    def __init__(self, output: str) -> None:
+    def __init__(self, output) -> None:
         self.output = output
 
 
 class _FakeStreamedResult:
-    def __init__(self, chunks: list[str]) -> None:
+    def __init__(self, chunks: list[str], suggestions: list[str] | None = None) -> None:
         self._chunks = chunks
+        self._suggestions = suggestions or []
 
-    async def stream_text(self, delta: bool = False):
+    async def stream_output(self, debounce_by: float | None = 0.1):
+        text = ""
         for chunk in self._chunks:
-            yield chunk
+            text += chunk
+            yield coach_agent.CoachReply(reply=text, suggestions=[])
+
+    async def get_output(self):
+        return coach_agent.CoachReply(reply="".join(self._chunks), suggestions=self._suggestions)
 
 
 class _FakeStreamContext:
-    def __init__(self, chunks: list[str]) -> None:
+    def __init__(self, chunks: list[str], suggestions: list[str] | None = None) -> None:
         self._chunks = chunks
+        self._suggestions = suggestions
 
     async def __aenter__(self) -> _FakeStreamedResult:
-        return _FakeStreamedResult(self._chunks)
+        return _FakeStreamedResult(self._chunks, self._suggestions)
 
     async def __aexit__(self, *exc_info) -> None:
         return None
@@ -64,10 +72,15 @@ class _FakeStreamContext:
 
 class _FakeAgent:
     async def run(self, message: str, message_history=None) -> _FakeResult:
-        return _FakeResult(output=f"echo: {message}")
+        return _FakeResult(output=coach_agent.CoachReply(reply=f"echo: {message}", suggestions=[]))
 
     def run_stream(self, message: str, message_history=None) -> _FakeStreamContext:
         return _FakeStreamContext([f"echo: {message}"])
+
+
+class _FakeAgentWithStreamedSuggestions:
+    def run_stream(self, message: str, message_history=None) -> _FakeStreamContext:
+        return _FakeStreamContext([f"echo: {message}"], suggestions=["How much protein do I need?"])
 
 
 class _FakeFailingAgent:
@@ -87,7 +100,44 @@ def test_chat_returns_agent_reply():
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert response.json() == {"reply": "echo: hello", "conversation_id": None}
+    assert response.json() == {"reply": "echo: hello", "conversation_id": None, "suggestions": []}
+
+
+class _FakeSuggestingAgent:
+    async def run(self, message: str, message_history=None) -> _FakeResult:
+        return _FakeResult(
+            output=coach_agent.CoachReply(
+                reply=f"echo: {message}", suggestions=["How much protein do I need?", "Log today's run"]
+            )
+        )
+
+
+def test_chat_returns_suggestions_from_structured_output():
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeSuggestingAgent()
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["suggestions"] == [
+        "How much protein do I need?",
+        "Log today's run",
+    ]
+
+
+def test_chat_stream_emits_suggestions_event():
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgentWithStreamedSuggestions()
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat/stream", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert 'event: suggestions\ndata: {"suggestions": ["How much protein do I need?"]}' in response.text
+    assert "event: done" in response.text
 
 
 def test_chat_stream_returns_sse_chunks():
@@ -124,7 +174,7 @@ class _RecordingAgent:
 
     async def run(self, message: str, message_history=None) -> _FakeResult:
         self.received_history = list(message_history or [])
-        return _FakeResult(output=f"echo: {message}")
+        return _FakeResult(output=coach_agent.CoachReply(reply=f"echo: {message}", suggestions=[]))
 
 
 def test_chat_passes_prior_turns_as_message_history():
