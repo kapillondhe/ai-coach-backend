@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from functools import lru_cache
 
@@ -5,7 +6,7 @@ from fastapi import Depends
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
-from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.toolsets import AbstractToolset
 
@@ -43,11 +44,18 @@ _MEMORY_TOOL_DESCRIPTION = (
 
 @lru_cache
 def _get_model() -> OpenRouterModel:
-    """Tier 1: main coach conversation model — tool-calling + tone-sensitive."""
+    """Tier 1: main coach conversation model — tool-calling + tone-sensitive.
+
+    Reasoning effort is pinned to the lowest setting: this model's OpenRouter
+    endpoint requires reasoning (it 400s if asked to disable it entirely), but
+    minimal effort still cuts most of the hidden chain-of-thought latency that
+    piles up before every reply and every tool call.
+    """
     settings = get_settings()
     return OpenRouterModel(
         settings.openrouter_model,
         provider=OpenRouterProvider(api_key=settings.openrouter_api_key),
+        settings=OpenRouterModelSettings(openrouter_reasoning={"effort": "minimal"}),
     )
 
 
@@ -116,11 +124,15 @@ async def _build_system_prompt(user_id: str | None) -> str:
 
 async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) -> Agent[None, CoachReply]:
     """Build a coach Agent for this request; not cached since attached toolsets depend on the user."""
+    toolsets, system_prompt = await asyncio.gather(
+        _build_toolsets(user_id),
+        _build_system_prompt(user_id),
+    )
     agent = Agent(
         model=_get_model(),
         output_type=CoachReply,
-        toolsets=await _build_toolsets(user_id),
-        system_prompt=await _build_system_prompt(user_id),
+        toolsets=toolsets,
+        system_prompt=system_prompt,
     )
 
     if user_id is not None:

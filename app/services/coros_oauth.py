@@ -2,6 +2,7 @@ import base64
 import contextlib
 import hashlib
 import secrets
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -24,6 +25,14 @@ AUTHORIZATION_ENDPOINT = f"{ISSUER}/oauth2/authorize"
 TOKEN_ENDPOINT = f"{ISSUER}/oauth2/token"
 REVOCATION_ENDPOINT = f"{ISSUER}/oauth2/revoke"
 REGISTRATION_ENDPOINT = f"{ISSUER}/connect/register"
+
+# Most users never connect COROS, so every chat turn's agent setup would otherwise
+# pay for a DB round-trip just to find out there's nothing there. Cache a negative
+# result briefly in-process; a real connection still resolves on the next request
+# within this TTL, and `handle_callback`/`disconnect` below don't need to invalidate
+# it explicitly since the window is short.
+_NOT_CONNECTED_CACHE_TTL = 60.0
+_not_connected_cache: dict[str, float] = {}
 
 
 class CorosOAuthError(Exception):
@@ -192,6 +201,7 @@ async def handle_callback(code: str, state: str) -> str:
     async with get_session() as session:
         await session.execute(stmt)
         await session.commit()
+    _not_connected_cache.pop(user_id, None)
     return user_id
 
 
@@ -211,6 +221,10 @@ async def get_status(user_id: str) -> ConnectionStatus:
 
 async def get_access_token(user_id: str) -> str | None:
     """Return a usable (refreshing if needed) access token for this user's COROS connection, or None if not connected."""
+    cached_at = _not_connected_cache.get(user_id)
+    if cached_at is not None and time.monotonic() - cached_at < _NOT_CONNECTED_CACHE_TTL:
+        return None
+
     async with get_session() as session:
         row = (
             await session.execute(
@@ -222,6 +236,7 @@ async def get_access_token(user_id: str) -> str | None:
             )
         ).first()
     if row is None:
+        _not_connected_cache[user_id] = time.monotonic()
         return None
 
     if row.expires_at is not None and row.expires_at < datetime.now(UTC) and row.refresh_token_encrypted:
