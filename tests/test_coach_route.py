@@ -300,6 +300,40 @@ def test_signed_in_chat_with_unknown_conversation_id_returns_404(monkeypatch):
     assert response.status_code == 404
 
 
+def test_chat_short_circuits_on_emergency_red_flag_without_calling_agent():
+    """An emergency message never reaches the LLM agent at all."""
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/coach/chat", json={"message": "I'm having chest pain during my run"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "emergency" in body["reply"].lower()
+    assert body["suggestions"] == []
+
+
+def test_chat_stream_short_circuits_on_emergency_red_flag_without_calling_agent():
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/coach/chat/stream",
+            json={"message": "I just got the worst headache of my life"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "emergency" in response.text.lower()
+    assert "event: done" in response.text
+    assert "event: error" not in response.text
+
+
 def test_signed_in_chat_ignores_client_supplied_history(monkeypatch):
     """Signed-in requests use server-side conversation state, not the anonymous `history` field."""
     from app.services import conversation as conversation_service

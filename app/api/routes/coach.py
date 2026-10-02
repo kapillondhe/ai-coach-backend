@@ -13,6 +13,7 @@ from app.agents.coach_agent import CoachReply, get_coach_agent
 from app.core.auth import get_current_user_id
 from app.services import chat_opener as chat_opener_service
 from app.services import conversation as conversation_service
+from app.services import safety as safety_service
 from app.services import titling as titling_service
 from app.services.conversation import ConversationNotFoundError, MessageData
 
@@ -107,6 +108,16 @@ async def chat(
 
     message_history, conversation_id, is_new_conversation = await _resolve_context(request, user_id)
 
+    if safety_service.contains_emergency_red_flag(request.message):
+        logger.warning("Emergency red flag detected in chat message; short-circuiting the agent")
+        reply = safety_service.EMERGENCY_RESPONSE
+        await _persist_turn(user_id, conversation_id, request.message, reply)
+        if is_new_conversation and user_id is not None and conversation_id is not None:
+            background_tasks.add_task(
+                titling_service.generate_and_set_title, conversation_id, user_id, request.message
+            )
+        return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=[])
+
     try:
         result = await agent.run(request.message, message_history=message_history)
     except Exception as exc:
@@ -142,6 +153,21 @@ async def chat_stream(
         try:
             if conversation_id:
                 yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id})}\n\n"
+
+            if safety_service.contains_emergency_red_flag(request.message):
+                logger.warning(
+                    "Emergency red flag detected in chat message; short-circuiting the agent"
+                )
+                reply = safety_service.EMERGENCY_RESPONSE
+                yield f"data: {json.dumps({'delta': reply})}\n\n"
+                await _persist_turn(user_id, conversation_id, request.message, reply)
+                if is_new_conversation and user_id is not None and conversation_id is not None:
+                    background_tasks.add_task(
+                        titling_service.generate_and_set_title, conversation_id, user_id, request.message
+                    )
+                yield "event: done\ndata: {}\n\n"
+                return
+
             async with agent.run_stream(request.message, message_history=message_history) as result:
                 async for partial in result.stream_output(debounce_by=0.1):
                     reply_so_far = partial.reply if partial.reply else ""

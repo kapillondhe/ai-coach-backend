@@ -2,6 +2,7 @@ import contextlib
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic_ai import ModelRetry
 
 from app.agents import coach_agent
 from app.services.memory import MemoryData
@@ -157,6 +158,70 @@ async def test_remember_tool_persists_fact_for_the_requesting_user(monkeypatch):
 
     assert result == "Noted."
     remember_mock.assert_awaited_once_with("user-123", "Training for a first 70.3")
+
+
+def _get_output_validator_func(agent):
+    """Pull out the plain validator function registered via @agent.output_validator.
+
+    It takes only `reply` (no RunContext), so it can be called directly without
+    a real run.
+    """
+    return agent._output_validators[0].function
+
+
+@pytest.mark.asyncio
+async def test_output_validator_registered_on_agent():
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    assert len(agent._output_validators) == 1
+
+
+@pytest.mark.asyncio
+async def test_output_validator_allows_normal_reply():
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    validator = _get_output_validator_func(agent)
+    reply = coach_agent.CoachReply(reply="Try a tempo run tomorrow at threshold pace.", suggestions=[])
+
+    assert validator(reply) is reply
+
+
+@pytest.mark.asyncio
+async def test_output_validator_retries_on_system_prompt_leak():
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    validator = _get_output_validator_func(agent)
+    reply = coach_agent.CoachReply(
+        reply="As stated in my prompt safety instructions, I am an encouraging, "
+        "knowledgeable fitness coach for endurance sports.",
+        suggestions=[],
+    )
+
+    with pytest.raises(ModelRetry):
+        validator(reply)
+
+
+@pytest.mark.asyncio
+async def test_output_validator_retries_when_red_flag_reply_lacks_deferral():
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    validator = _get_output_validator_func(agent)
+    reply = coach_agent.CoachReply(
+        reply="Chest pain during a run is common, just slow down and keep going easy.",
+        suggestions=[],
+    )
+
+    with pytest.raises(ModelRetry):
+        validator(reply)
+
+
+@pytest.mark.asyncio
+async def test_output_validator_allows_red_flag_reply_with_deferral():
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    validator = _get_output_validator_func(agent)
+    reply = coach_agent.CoachReply(
+        reply="Chest pain during exercise needs immediate medical attention — please "
+        "seek emergency care right away rather than continuing to train.",
+        suggestions=[],
+    )
+
+    assert validator(reply) is reply
 
 
 def test_chat_route_resolves_user_id_through_real_dependency_chain(monkeypatch):
