@@ -45,7 +45,12 @@ SYSTEM_PROMPT = (
     "(under ~8 words), first-person follow-up messages the user might "
     "plausibly send next, phrased as if the user were typing them (e.g. "
     "\"How much protein do I need?\"), directly relevant to what was just "
-    "discussed. Leave it empty if nothing natural fits — don't force it."
+    "discussed. Leave it empty if nothing natural fits — don't force it. "
+    "Never invent specific personal data (a body weight, pace, time, age, "
+    "etc.) in a suggestion as if the user had said it. If your reply is "
+    "itself asking the user for that kind of specific personal detail to "
+    "proceed, leave suggestions empty — they should type their own answer "
+    "rather than tap a guessed one."
 )
 
 
