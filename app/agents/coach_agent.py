@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
 from functools import lru_cache
 
 from fastapi import Depends
@@ -127,21 +128,40 @@ async def _build_toolsets(user_id: str | None) -> list[AbstractToolset]:
     return toolsets
 
 
+def _dated_system_prompt() -> str:
+    """Prefix SYSTEM_PROMPT with today's real date.
+
+    Without this, the model has no way to know the actual current date and falls
+    back to a guess from its training data — which is wrong by construction and
+    silently corrupts any date-range tool call (e.g. COROS's `querySportRecords`),
+    making "my last activity" return a stale window instead of recent data.
+    """
+    today = datetime.now(UTC).strftime("%A, %Y-%m-%d")
+    return (
+        f"Today's date is {today} (UTC). Use this as the reference point for any "
+        "relative date range (e.g. \"this week\", \"last activity\", \"yesterday\") and "
+        "for any date arguments a tool call requires — never guess or assume a date "
+        f"from training data.\n\n{SYSTEM_PROMPT}"
+    )
+
+
 async def _build_system_prompt(user_id: str | None) -> str:
+    base_prompt = _dated_system_prompt()
+
     if user_id is None:
-        return SYSTEM_PROMPT
+        return base_prompt
 
     try:
         memories = await memory_service.list_memories(user_id)
     except Exception:
         logger.exception("Failed to load stored memories for user %s", user_id)
-        return SYSTEM_PROMPT
+        return base_prompt
 
     if not memories:
-        return SYSTEM_PROMPT
+        return base_prompt
 
     bullets = "\n".join(f"- {m.content}" for m in memories)
-    prompt = f"{SYSTEM_PROMPT}\n\nThings you remember about this user from past conversations:\n{bullets}"
+    prompt = f"{base_prompt}\n\nThings you remember about this user from past conversations:\n{bullets}"
     logger.info("Injecting %d stored memories into system prompt for user %s", len(memories), user_id)
     return prompt
 

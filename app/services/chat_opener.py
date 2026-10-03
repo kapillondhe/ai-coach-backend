@@ -1,5 +1,6 @@
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -58,9 +59,37 @@ async def _latest_activity(user_id: str) -> SyncedActivity | None:
     return result.scalars().first()
 
 
+def _describe_when(started_at) -> str:
+    """A recency-aware description of when an activity happened.
+
+    Plain `strftime("%A")` (e.g. "Friday") reads as "this past Friday" regardless of
+    how long ago it actually was — misleading once an activity is weeks old (e.g. a
+    stale sync, or a user returning after a break). Make the staleness explicit past
+    about a week instead of implying it just happened.
+    """
+    if started_at is None:
+        return "recently"
+
+    now = datetime.now(UTC)
+    days_ago = (now.date() - started_at.astimezone(UTC).date()).days
+
+    if days_ago <= 0:
+        return "today"
+    if days_ago == 1:
+        return "yesterday"
+    if days_ago <= 6:
+        return f"on {started_at.strftime('%A')}"
+    if days_ago <= 13:
+        return "about a week ago"
+    weeks_ago = days_ago // 7
+    if weeks_ago < 8:
+        return f"about {weeks_ago} weeks ago"
+    return "a while ago"
+
+
 def _describe_activity(activity: SyncedActivity) -> str:
     discipline_word = _DISCIPLINE_WORDS.get(activity.discipline, "session")
-    when = activity.started_at.strftime("%A") if activity.started_at else "recently"
+    when = _describe_when(activity.started_at)
 
     details = []
     if activity.distance_km:
@@ -69,7 +98,7 @@ def _describe_activity(activity: SyncedActivity) -> str:
         details.append(f"{round(activity.duration_seconds / 60)} min")
     detail_str = f" — {', '.join(details)}" if details else ""
 
-    return f"Nice {discipline_word} on {when}{detail_str}. How are you feeling for what's next?"
+    return f"Nice {discipline_word} {when}{detail_str}. How are you feeling for what's next?"
 
 
 async def get_chat_opener(user_id: str | None) -> ChatOpener:

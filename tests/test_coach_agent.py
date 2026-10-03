@@ -93,7 +93,13 @@ async def test_get_coach_agent_resolves_current_user_via_dependency_default(monk
 @pytest.mark.asyncio
 async def test_build_system_prompt_anonymous_returns_base_prompt():
     prompt = await coach_agent._build_system_prompt(user_id=None)
-    assert prompt == coach_agent.SYSTEM_PROMPT
+    assert prompt == coach_agent._dated_system_prompt()
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_injects_todays_date():
+    prompt = await coach_agent._build_system_prompt(user_id=None)
+    assert "Today's date is" in prompt
 
 
 @pytest.mark.asyncio
@@ -102,7 +108,7 @@ async def test_build_system_prompt_signed_in_no_memories_returns_base_prompt(mon
 
     prompt = await coach_agent._build_system_prompt(user_id="user-123")
 
-    assert prompt == coach_agent.SYSTEM_PROMPT
+    assert prompt == coach_agent._dated_system_prompt()
 
 
 @pytest.mark.asyncio
@@ -128,7 +134,7 @@ async def test_build_system_prompt_degrades_gracefully_on_memory_lookup_failure(
     # Must not raise — a memory-store failure can never break core chat.
     prompt = await coach_agent._build_system_prompt(user_id="user-123")
 
-    assert prompt == coach_agent.SYSTEM_PROMPT
+    assert prompt == coach_agent._dated_system_prompt()
 
 
 @pytest.mark.asyncio

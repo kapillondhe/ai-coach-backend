@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -68,9 +68,12 @@ async def test_signed_in_connected_no_activity_falls_back(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_signed_in_connected_with_activity_references_it(monkeypatch):
+    # Within the last week, relative to whenever the test runs, so this doesn't
+    # silently become a "weeks ago" assertion as time passes.
+    started_at = datetime.now(UTC) - timedelta(days=2)
     activity = SimpleNamespace(
         discipline="bike",
-        started_at=datetime(2026, 9, 26, tzinfo=UTC),  # a Saturday
+        started_at=started_at,
         distance_km=62.3,
         duration_seconds=7200,
     )
@@ -86,7 +89,7 @@ async def test_signed_in_connected_with_activity_references_it(monkeypatch):
     opener = await chat_opener.get_chat_opener("user-123")
 
     assert "ride" in opener.text
-    assert "Saturday" in opener.text
+    assert started_at.strftime("%A") in opener.text
     assert "62.3km" in opener.text
     assert opener.chips == chat_opener._CONNECTED_CHIPS
 
@@ -96,4 +99,30 @@ def test_describe_activity_handles_missing_distance_and_duration():
 
     description = chat_opener._describe_activity(activity)
 
-    assert description.startswith("Nice run on recently")
+    assert description.startswith("Nice run recently")
+
+
+@pytest.mark.parametrize(
+    ("days_ago", "expected_substring"),
+    [
+        (0, "today"),
+        (1, "yesterday"),
+        (13, "about a week ago"),
+        (20, "about 2 weeks ago"),
+        (90, "a while ago"),
+    ],
+)
+def test_describe_when_reflects_real_elapsed_time(days_ago, expected_substring):
+    started_at = datetime.now(UTC) - timedelta(days=days_ago)
+
+    assert chat_opener._describe_when(started_at) == expected_substring
+
+
+def test_describe_when_within_the_week_names_the_weekday():
+    started_at = datetime.now(UTC) - timedelta(days=4)
+
+    assert chat_opener._describe_when(started_at) == f"on {started_at.strftime('%A')}"
+
+
+def test_describe_when_none_is_recently():
+    assert chat_opener._describe_when(None) == "recently"
