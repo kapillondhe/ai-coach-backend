@@ -1,5 +1,6 @@
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agents import coach_agent
@@ -8,6 +9,18 @@ from app.api.routes import coach as coach_routes
 from app.core.auth import get_current_user_id
 from app.main import app
 from app.services.chat_opener import ChatOpener
+
+
+@pytest.fixture(autouse=True)
+def _stub_scope_classifier(monkeypatch):
+    """Default every test to "on-topic" so routes don't hit a real LLM classifier call.
+
+    `scope_service.is_off_topic` makes a real model call (unlike the regex-based
+    `safety_service.contains_emergency_red_flag`), so it must be stubbed the same way
+    `get_coach_agent` is faked via dependency_overrides — tests that specifically
+    exercise the off-topic short-circuit override this per-test.
+    """
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=False))
 
 
 def test_opener_anonymous(monkeypatch):
@@ -315,6 +328,42 @@ def test_chat_short_circuits_on_emergency_red_flag_without_calling_agent():
     body = response.json()
     assert "emergency" in body["reply"].lower()
     assert body["suggestions"] == []
+
+
+def test_chat_short_circuits_on_off_topic_message_without_calling_agent(monkeypatch):
+    """An off-topic message never reaches the LLM agent at all — same shape as the
+    emergency red-flag short-circuit, but driven by the scope classifier instead of
+    a regex."""
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=True))
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/coach/chat", json={"message": "who's the best actor working today?"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["reply"] == coach_routes.scope_service.OFF_TOPIC_RESPONSE
+    assert body["suggestions"] == []
+
+
+def test_chat_stream_short_circuits_on_off_topic_message_without_calling_agent(monkeypatch):
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=True))
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/coach/chat/stream", json={"message": "who's the best actor working today?"}
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert "event: done" in response.text
+    assert "event: error" not in response.text
 
 
 def test_chat_stream_short_circuits_on_emergency_red_flag_without_calling_agent():

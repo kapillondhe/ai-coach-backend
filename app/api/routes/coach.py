@@ -15,6 +15,7 @@ from app.core.auth import get_current_user_id
 from app.services import chat_opener as chat_opener_service
 from app.services import conversation as conversation_service
 from app.services import safety as safety_service
+from app.services import scope as scope_service
 from app.services import titling as titling_service
 from app.services.conversation import ConversationNotFoundError, MessageData
 
@@ -166,6 +167,16 @@ async def chat(
             )
         return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=[])
 
+    if await scope_service.is_off_topic(request.message, message_history=message_history):
+        logger.info("Off-topic message detected; short-circuiting the agent")
+        reply = scope_service.OFF_TOPIC_RESPONSE
+        await _persist_turn(user_id, conversation_id, request.message, reply)
+        if is_new_conversation and user_id is not None and conversation_id is not None:
+            background_tasks.add_task(
+                titling_service.generate_and_set_title, conversation_id, user_id, request.message
+            )
+        return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=[])
+
     try:
         result = await agent.run(request.message, message_history=message_history)
     except Exception as exc:
@@ -209,6 +220,16 @@ async def chat_stream(
                     "Emergency red flag detected in chat message; short-circuiting the agent"
                 )
                 reply = safety_service.EMERGENCY_RESPONSE
+                yield f"data: {json.dumps({'delta': reply})}\n\n"
+                write = _persist_turn_in_background(user_id, conversation_id, request.message, reply)
+                if is_new_conversation and user_id is not None and conversation_id is not None:
+                    background_tasks.add_task(
+                        titling_service.generate_and_set_title, conversation_id, user_id, request.message
+                    )
+                yield "event: done\ndata: {}\n\n"
+            elif await scope_service.is_off_topic(request.message, message_history=message_history):
+                logger.info("Off-topic message detected; short-circuiting the agent")
+                reply = scope_service.OFF_TOPIC_RESPONSE
                 yield f"data: {json.dumps({'delta': reply})}\n\n"
                 write = _persist_turn_in_background(user_id, conversation_id, request.message, reply)
                 if is_new_conversation and user_id is not None and conversation_id is not None:
