@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv==1.2.1",
     "httpx==0.28.1",
     "pydantic-ai-slim[openai,mcp]==2.37.0",
+    "pydantic-evals==2.37.0",
     "cryptography==50.0.1",
     "asyncpg==0.31.0",
     "sqlalchemy[asyncio]==2.0.54",
