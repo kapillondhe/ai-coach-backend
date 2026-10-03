@@ -5,7 +5,7 @@ from functools import lru_cache
 
 from fastapi import Depends
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelRetry
+from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -60,6 +60,20 @@ class CoachReply(BaseModel):
 
     reply: str
     suggestions: list[str] = Field(default_factory=list, max_length=3)
+
+
+def _reply_from_plain_text(text: str) -> CoachReply:
+    """Fallback for models that answer in plain text instead of calling the output tool.
+
+    Some OpenRouter models (observed with z-ai/glm-5.3-flash) occasionally skip the
+    `final_result` tool call and just write a conversational reply. Without this,
+    pydantic-ai tries to parse that text as CoachReply JSON, fails, and after
+    exhausting output retries raises UnexpectedModelBehavior — which the route handler
+    turns into a 502 "temporarily unavailable" for the user. Wrapping plain text into a
+    CoachReply directly (with no suggestions) avoids that failure entirely.
+    """
+    return CoachReply(reply=text, suggestions=[])
+
 
 _MEMORY_TOOL_DESCRIPTION = (
     "Record a short, durable fact or preference the signed-in user just stated "
@@ -174,9 +188,10 @@ async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) ->
     )
     agent = Agent(
         model=_get_model(),
-        output_type=CoachReply,
+        output_type=[ToolOutput(CoachReply), TextOutput(_reply_from_plain_text)],
         toolsets=toolsets,
         system_prompt=system_prompt,
+        retries={"output": 3},
     )
 
     @agent.output_validator
