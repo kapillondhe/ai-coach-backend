@@ -7,8 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agents.coach_agent import _base_toolset
 from app.api.router import api_router
 from app.core.config import get_settings
-from app.core.db import close_engine
+from app.core.db import close_engine, warm_up
 from app.core.telemetry import setup_telemetry
+from app.services import coros_mcp
 
 settings = get_settings()
 
@@ -16,9 +17,11 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     async with _base_toolset():
+        await warm_up()
         try:
             yield
         finally:
+            await coros_mcp.close_all()
             await close_engine()
 
 

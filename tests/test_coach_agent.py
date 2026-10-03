@@ -26,10 +26,27 @@ async def test_build_toolsets_signed_in_without_coros_connection(monkeypatch):
 @pytest.mark.asyncio
 async def test_build_toolsets_signed_in_with_coros_connection(monkeypatch):
     monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value="a-token"))
+    pooled = object()
+    get_toolset = AsyncMock(return_value=pooled)
+    monkeypatch.setattr(coach_agent.coros_mcp, "get_toolset", get_toolset)
 
     toolsets = await coach_agent._build_toolsets(user_id="user-123")
 
     assert len(toolsets) == 2  # base + COROS
+    assert toolsets[1] is pooled  # reused pooled session, not a fresh MCPToolset
+    get_toolset.assert_awaited_once_with("user-123", "a-token")
+
+
+@pytest.mark.asyncio
+async def test_build_toolsets_degrades_gracefully_when_coros_session_cannot_open(monkeypatch):
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value="a-token"))
+    monkeypatch.setattr(
+        coach_agent.coros_mcp, "get_toolset", AsyncMock(side_effect=TimeoutError("COROS MCP unreachable"))
+    )
+
+    toolsets = await coach_agent._build_toolsets(user_id="user-123")
+
+    assert len(toolsets) == 1
 
 
 @pytest.mark.asyncio
@@ -60,6 +77,9 @@ async def test_get_coach_agent_resolves_current_user_via_dependency_default(monk
     # toolset, even after they'd connected via /integrations/coros/connect.
     monkeypatch.setattr(coach_agent, "get_current_user_id", lambda request=None: "resolved-user")
     monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value="a-token"))
+    from pydantic_ai.toolsets import FunctionToolset
+
+    monkeypatch.setattr(coach_agent.coros_mcp, "get_toolset", AsyncMock(return_value=FunctionToolset([])))
 
     # Simulate what FastAPI does: call get_current_user_id() and pass its
     # result as user_id, since Depends() isn't resolved when calling the

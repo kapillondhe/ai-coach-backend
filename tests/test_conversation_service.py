@@ -13,6 +13,8 @@ class _FakeConversationSession:
     def __init__(self, conversations: dict, messages: dict):
         self.conversations = conversations
         self.messages = messages
+        self.insert_statements = 0
+        self.select_statements = 0
 
     async def execute(self, stmt):
         compiled_type = type(stmt).__name__
@@ -20,20 +22,34 @@ class _FakeConversationSession:
         if compiled_type == "Insert":
             values = stmt.compile().params
             table = stmt.table.name
-            if table == "conversations":
-                self.conversations[values["id"]] = dict(values)
-            elif table == "conversation_messages":
-                self.messages.setdefault(values["conversation_id"], []).append(dict(values))
+            # Multi-row inserts compile to suffixed params (`role_m0`, `role_m1`, ...).
+            if any(k.endswith("_m0") for k in values):
+                rows: dict[str, dict] = {}
+                for key, val in values.items():
+                    col, _, idx = key.rpartition("_m")
+                    rows.setdefault(idx, {})[col] = val
+                row_list = [rows[i] for i in sorted(rows, key=int)]
+            else:
+                row_list = [dict(values)]
+            for row in row_list:
+                if table == "conversations":
+                    self.conversations[row["id"]] = row
+                elif table == "conversation_messages":
+                    self.messages.setdefault(row["conversation_id"], []).append(row)
+            self.insert_statements += 1
             return SimpleNamespace(first=lambda: None)
 
         if compiled_type == "Update":
-            values = stmt.compile().params
-            conv_id = values.get("conversations_id") or next(iter(self.conversations))
-            row = self.conversations[conv_id]
-            for key, val in values.items():
+            params = stmt.compile().params
+            conv_id = params.get("id_1")
+            owner = params.get("user_id_1")
+            row = self.conversations.get(conv_id)
+            if row is None or (owner is not None and row["user_id"] != owner):
+                return SimpleNamespace(rowcount=0, first=lambda: None)
+            for key, val in params.items():
                 if key in row:
                     row[key] = val
-            return SimpleNamespace(first=lambda: None)
+            return SimpleNamespace(rowcount=1, first=lambda: None)
 
         if compiled_type == "Delete":
             table = stmt.table.name
@@ -55,9 +71,25 @@ class _FakeConversationSession:
             raise AssertionError(f"Unhandled delete table: {table}")
 
         if compiled_type == "Select":
-            table_name = stmt.get_final_froms()[0].name
+            from_ = stmt.get_final_froms()[0]
             params = stmt.compile().params
             str_params = [v for v in params.values() if isinstance(v, str)]
+
+            if from_.__class__.__name__.endswith("Join"):
+                # get_conversation: conversations OUTER JOIN conversation_messages.
+                self.select_statements += 1
+                conv = self.conversations.get(params["id_1"])
+                if conv is None or conv["user_id"] != params["user_id_1"]:
+                    return SimpleNamespace(all=lambda: [])
+                msgs = sorted(self.messages.get(conv["id"], []), key=lambda m: m.get("created_at") or 0)
+                base = {"id": conv["id"], "user_id": conv["user_id"], "title": conv.get("title")}
+                if not msgs:
+                    joined = [SimpleNamespace(**base, role=None, content=None)]
+                else:
+                    joined = [SimpleNamespace(**base, role=m["role"], content=m["content"]) for m in msgs]
+                return SimpleNamespace(all=lambda: joined)
+
+            table_name = from_.name
 
             if table_name == "conversations":
                 matches = [c for c in self.conversations.values() if all(v in c.values() for v in str_params)]
@@ -88,6 +120,9 @@ class _FakeConversationSession:
     async def commit(self):
         pass
 
+    async def rollback(self):
+        pass
+
     async def __aenter__(self):
         return self
 
@@ -97,16 +132,17 @@ class _FakeConversationSession:
 
 @pytest.fixture
 def store():
-    return {"conversations": {}, "messages": {}}
+    return {"conversations": {}, "messages": {}, "sessions": []}
 
 
 @pytest.fixture(autouse=True)
 def _patch_session(monkeypatch, store):
-    monkeypatch.setattr(
-        conversation_service,
-        "get_session",
-        lambda: _FakeConversationSession(store["conversations"], store["messages"]),
-    )
+    def _new_session():
+        session = _FakeConversationSession(store["conversations"], store["messages"])
+        store["sessions"].append(session)
+        return session
+
+    monkeypatch.setattr(conversation_service, "get_session", _new_session)
     yield
 
 
@@ -157,6 +193,61 @@ async def test_append_messages_raises_for_wrong_user(store):
         await conversation_service.append_messages(
             conversation_id, "user-2", [MessageData(role="user", content="hi")]
         )
+
+    assert store["messages"] == {}
+
+
+@pytest.mark.asyncio
+async def test_append_messages_raises_for_unknown_conversation(store):
+    with pytest.raises(ConversationNotFoundError):
+        await conversation_service.append_messages(
+            str(uuid.uuid4()), "user-1", [MessageData(role="user", content="hi")]
+        )
+
+    assert store["messages"] == {}
+
+
+@pytest.mark.asyncio
+async def test_append_messages_writes_a_turn_in_one_insert_and_keeps_order(store):
+    conversation_id = await conversation_service.create_conversation("user-1")
+    store["sessions"].clear()
+
+    await conversation_service.append_messages(
+        conversation_id,
+        "user-1",
+        [MessageData(role="user", content="q"), MessageData(role="assistant", content="a")],
+    )
+
+    (session,) = store["sessions"]  # one session for the whole write
+    assert session.insert_statements == 1  # both messages in a single multi-row insert
+    rows = store["messages"][conversation_id]
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+    assert rows[0]["created_at"] < rows[1]["created_at"]  # stable order on read-back
+    assert store["conversations"][conversation_id]["updated_at"] == rows[0]["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_uses_a_single_query(store):
+    conversation_id = await conversation_service.create_conversation("user-1")
+    await conversation_service.append_messages(
+        conversation_id, "user-1", [MessageData(role="user", content="hi")]
+    )
+    store["sessions"].clear()
+
+    await conversation_service.get_conversation(conversation_id, "user-1")
+
+    (session,) = store["sessions"]
+    assert session.select_statements == 1
+
+
+@pytest.mark.asyncio
+async def test_get_conversation_with_no_messages_returns_empty_list(store):
+    conversation_id = await conversation_service.create_conversation("user-1")
+
+    data = await conversation_service.get_conversation(conversation_id, "user-1")
+
+    assert data.id == conversation_id
+    assert data.messages == []
 
 
 @pytest.mark.asyncio

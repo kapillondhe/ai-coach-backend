@@ -360,3 +360,149 @@ def test_signed_in_chat_ignores_client_supplied_history(monkeypatch):
 
     assert response.status_code == 200
     assert recording_agent.received_history == []
+
+
+def test_chat_stream_sends_done_before_the_turn_is_saved(monkeypatch):
+    """`done` must not wait on the (slow) DB write; the write still completes.
+
+    Drives the ASGI app directly: TestClient buffers the whole body until the app
+    returns, so it can't observe when `done` actually went out on the wire.
+    """
+    import asyncio
+    import json as _json
+
+    from app.services import conversation as conversation_service
+
+    order: list[str] = []
+
+    async def _slow_append(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        order.append("saved")
+
+    monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(return_value="conv-new"))
+    monkeypatch.setattr(conversation_service, "append_messages", _slow_append)
+    monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", AsyncMock())
+
+    async def _drive() -> None:
+        body = _json.dumps({"message": "hello"}).encode()
+        scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}, "http_version": "1.1",
+            "method": "POST", "scheme": "http", "path": "/api/coach/chat/stream", "raw_path": b"",
+            "root_path": "", "query_string": b"", "server": ("test", 80), "client": ("test", 1),
+            "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+        }
+        received = False
+
+        async def receive():
+            nonlocal received
+            if not received:
+                received = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await asyncio.sleep(3600)
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body" and b"event: done" in message.get("body", b""):
+                order.append("done")
+
+        await app(scope, receive, send)
+
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgentWithStreamedSuggestions()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        asyncio.run(_drive())
+    finally:
+        app.dependency_overrides.clear()
+
+    assert order == ["done", "saved"]  # done sent first; the request still waits for the save
+    assert "conv-new" not in coach_routes._pending_writes
+
+
+def test_chat_stream_save_failure_does_not_turn_into_an_error_event(monkeypatch):
+    from app.services import conversation as conversation_service
+
+    monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(return_value="conv-new"))
+    monkeypatch.setattr(
+        conversation_service, "append_messages", AsyncMock(side_effect=RuntimeError("DB down"))
+    )
+    monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgent()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat/stream", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "event: done" in response.text
+    assert "event: error" not in response.text
+
+
+def test_next_turn_waits_for_previous_turns_pending_save(monkeypatch):
+    """A follow-up message must see the prior turn in its history even if that save is still running."""
+    import asyncio
+
+    from app.services import conversation as conversation_service
+
+    events: list[str] = []
+
+    async def _get_conversation(conversation_id, user_id):
+        events.append("history-loaded")
+        return _FakeConversationData(conversation_id, [])
+
+    async def _run():
+        async def _slow_save():
+            await asyncio.sleep(0.2)
+            events.append("prior-turn-saved")
+
+        task = asyncio.create_task(_slow_save())
+        coach_routes._pending_writes["conv-1"] = task
+        try:
+            await coach_routes._resolve_context(
+                coach_routes.ChatRequest(message="next", conversation_id="conv-1"), "user-123"
+            )
+        finally:
+            coach_routes._pending_writes.pop("conv-1", None)
+
+    monkeypatch.setattr(conversation_service, "get_conversation", _get_conversation)
+    asyncio.run(_run())
+
+    assert events == ["prior-turn-saved", "history-loaded"]
+
+
+def test_history_load_runs_concurrently_with_agent_setup(monkeypatch):
+    """The conversation load must overlap get_coach_agent's setup, not run after it."""
+    import asyncio
+
+    from app.services import conversation as conversation_service
+
+    events: list[str] = []
+
+    async def _slow_get_conversation(conversation_id, user_id):
+        events.append("history-start")
+        await asyncio.sleep(0.1)
+        events.append("history-end")
+        return _FakeConversationData(conversation_id, [])
+
+    async def _slow_agent():
+        events.append("agent-start")
+        await asyncio.sleep(0.3)
+        events.append("agent-end")
+        return _FakeAgent()
+
+    monkeypatch.setattr(conversation_service, "get_conversation", _slow_get_conversation)
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = _slow_agent
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat", json={"message": "hi", "conversation_id": "conv-1"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    # Exactly one history load, and it finished while agent setup was still running.
+    assert events.count("history-start") == 1
+    assert events.index("history-end") < events.index("agent-end")

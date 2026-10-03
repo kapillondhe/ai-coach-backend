@@ -154,6 +154,18 @@ async def test_disconnect_deletes_local_row_even_if_revocation_fails(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_disconnect_drops_pooled_coros_chat_session(monkeypatch):
+    session = _FakeSession(results=[None])  # no stored row -> revocation call is skipped
+    monkeypatch.setattr(coros_oauth, "get_session", lambda: session)
+    discard = AsyncMock()
+    monkeypatch.setattr(coros_oauth.coros_mcp, "discard", discard)
+
+    await coros_oauth.disconnect("user-123")
+
+    discard.assert_awaited_once_with("user-123")
+
+
+@pytest.mark.asyncio
 async def test_disconnect_raises_coros_oauth_error_on_db_failure(monkeypatch):
     class _FailingCommitSession(_FakeSession):
         async def commit(self):

@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import get_settings
 from app.core.db import get_session
 from app.core.models import OAuthClient, OAuthState, UserIntegration
+from app.services import coros_mcp
 from app.services.token_crypto import decrypt_token, encrypt_token
 
 PROVIDER = "coros"
@@ -316,3 +317,6 @@ async def disconnect(user_id: str) -> None:
             await session.commit()
     except SQLAlchemyError as exc:
         raise CorosOAuthError(f"Failed to delete local COROS integration: {exc}") from exc
+    finally:
+        # The pooled chat session uses the now-revoked token; don't keep serving it.
+        await coros_mcp.discard(user_id)

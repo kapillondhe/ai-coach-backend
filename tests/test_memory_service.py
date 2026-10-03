@@ -56,7 +56,63 @@ def store():
 @pytest.fixture(autouse=True)
 def _patch_session(monkeypatch, store):
     monkeypatch.setattr(memory_service, "get_session", lambda: _FakeMemorySession(store))
+    memory_service._list_cache.clear()
     yield
+    memory_service._list_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_memories_is_cached_between_calls(store, monkeypatch):
+    await memory_service.remember("user-1", "first fact")
+    await memory_service.list_memories("user-1")
+
+    store["user-1"][0]["content"] = "edited elsewhere"
+    memories = await memory_service.list_memories("user-1")
+
+    assert [m.content for m in memories] == ["first fact"]  # served from cache, no DB read
+
+
+@pytest.mark.asyncio
+async def test_list_memories_cache_expires_after_ttl(store, monkeypatch):
+    await memory_service.remember("user-1", "first fact")
+    await memory_service.list_memories("user-1")
+    monkeypatch.setattr(memory_service, "_LIST_CACHE_TTL", 0.0)
+
+    await memory_service.remember("user-2", "unrelated")  # doesn't touch user-1's entry
+    store["user-1"][0]["content"] = "edited elsewhere"
+    memories = await memory_service.list_memories("user-1")
+
+    assert [m.content for m in memories] == ["edited elsewhere"]
+
+
+@pytest.mark.asyncio
+async def test_remember_invalidates_cached_list(store):
+    await memory_service.remember("user-1", "first fact")
+    await memory_service.list_memories("user-1")
+
+    await memory_service.remember("user-1", "second fact")
+    memories = await memory_service.list_memories("user-1")
+
+    assert [m.content for m in memories] == ["first fact", "second fact"]
+
+
+@pytest.mark.asyncio
+async def test_forget_invalidates_cached_list(store):
+    data = await memory_service.remember("user-1", "first fact")
+    await memory_service.list_memories("user-1")
+
+    await memory_service.forget("user-1", data.id)
+
+    assert await memory_service.list_memories("user-1") == []
+
+
+@pytest.mark.asyncio
+async def test_list_memories_cache_is_not_mutated_by_callers(store):
+    await memory_service.remember("user-1", "first fact")
+    first = await memory_service.list_memories("user-1")
+    first.clear()
+
+    assert [m.content for m in await memory_service.list_memories("user-1")] == ["first fact"]
 
 
 @pytest.mark.asyncio

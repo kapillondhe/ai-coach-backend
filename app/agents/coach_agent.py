@@ -12,7 +12,7 @@ from pydantic_ai.toolsets import AbstractToolset
 
 from app.core.auth import get_current_user_id
 from app.core.config import get_settings
-from app.services import coros_oauth
+from app.services import coros_mcp, coros_oauth
 from app.services import memory as memory_service
 from app.services import safety as safety_service
 
@@ -113,13 +113,11 @@ async def _build_toolsets(user_id: str | None) -> list[AbstractToolset]:
             access_token = None
 
         if access_token:
-            settings = get_settings()
-            toolsets.append(
-                MCPToolset(
-                    client=settings.coros_mcp_server_url,
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-            )
+            try:
+                toolsets.append(await coros_mcp.get_toolset(user_id, access_token))
+            except Exception:
+                # Same contract as the token lookup above: COROS trouble never breaks core chat.
+                logger.exception("Failed to open COROS MCP session for user %s; continuing without it", user_id)
 
     return toolsets
 
