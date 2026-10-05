@@ -8,12 +8,14 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
+from pydantic_ai.models.system_one import SystemOneModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
+from pydantic_ai.providers.system_one import SystemOneProvider
 from pydantic_ai.toolsets import AbstractToolset
 
 from app.core.auth import get_current_user_id
 from app.core.config import get_settings
-from app.services import coros_mcp, coros_oauth
+from app.services import coros_mcp, coros_oauth, memory_guardrail
 from app.services import memory as memory_service
 from app.services import safety as safety_service
 
@@ -131,6 +133,22 @@ def get_utility_model() -> OpenRouterModel:
 
 
 @lru_cache
+def get_jev_model() -> SystemOneModel:
+    """Decision model (TypeSafe's Jev) for typed yes/no/choice classification — used by
+    app.services.scope for the off-topic guardrail.
+
+    Routed through OpenRouter's `/v1/systemone`-compatible endpoint via `SystemOneModel`
+    + `SystemOneProvider` (billed to the same OPENROUTER_API_KEY as every other model
+    here) rather than `pydantic_ai.models.typesafe.TypeSafeModel`, which talks directly
+    to TypeSafe's own API and needs a separate TYPESAFE_API_KEY/account — no reason to
+    add that dependency when OpenRouter already serves the same model.
+    """
+    settings = get_settings()
+    provider = SystemOneProvider(base_url="https://openrouter.ai/api", api_key=settings.openrouter_api_key)
+    return SystemOneModel(settings.openrouter_jev_model, provider=provider)
+
+
+@lru_cache
 def _base_toolset() -> MCPToolset:
     """Our own MCP server's toolset — a single long-lived connection shared across requests.
     """
@@ -245,6 +263,9 @@ async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) ->
 
         @agent.tool_plain(description=_MEMORY_TOOL_DESCRIPTION)
         async def remember(fact: str) -> str:
+            if not await memory_guardrail.is_worth_remembering(fact):
+                logger.info("Jev guardrail declined to persist candidate memory for user %s", user_id)
+                return "Not saved — not durable/specific enough to remember long-term."
             await memory_service.remember(user_id, fact)
             return "Noted."
 

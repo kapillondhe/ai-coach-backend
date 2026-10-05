@@ -174,6 +174,7 @@ async def test_remember_tool_has_description_for_the_model(monkeypatch):
 async def test_remember_tool_persists_fact_for_the_requesting_user(monkeypatch):
     monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
     monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    monkeypatch.setattr(coach_agent.memory_guardrail, "is_worth_remembering", AsyncMock(return_value=True))
     remember_mock = AsyncMock()
     monkeypatch.setattr(coach_agent.memory_service, "remember", remember_mock)
 
@@ -184,6 +185,23 @@ async def test_remember_tool_persists_fact_for_the_requesting_user(monkeypatch):
 
     assert result == "Noted."
     remember_mock.assert_awaited_once_with("user-123", "Training for a first 70.3")
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_skips_persisting_when_jev_guardrail_declines(monkeypatch):
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    monkeypatch.setattr(coach_agent.memory_guardrail, "is_worth_remembering", AsyncMock(return_value=False))
+    remember_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.memory_service, "remember", remember_mock)
+
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+    remember_tool = agent.toolsets[0].tools["remember"]
+
+    result = await remember_tool.function("ok thanks")
+
+    assert result != "Noted."
+    remember_mock.assert_not_awaited()
 
 
 def _get_output_validator_func(agent):

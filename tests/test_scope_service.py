@@ -1,9 +1,13 @@
 """Unit tests for app.services.scope — the off-topic classifier guardrail.
 
-Mocks pydantic_ai.Agent.run rather than hitting a real model, mirroring the
-`get_coach_agent` tests' convention of not making real network calls in this
-test file's scope. The classifier's actual accuracy against the live model was
-verified manually (see the ai-coach-backend-patterns skill notes), not here.
+Mocks pydantic_ai.Agent.run rather than hitting the real Jev/OpenRouter API,
+mirroring the `get_coach_agent` tests' convention of not making real network
+calls in this test file's scope. The classifier's accuracy against the live
+Jev model was checked manually against evals/cases.py's labeled cases (see
+the ai-coach-backend-patterns skill notes) — not confirmed as a match for
+the pre-Jev classifier's accuracy after the later switch to
+`BoolCriteria`/`Annotated[bool, ...]` for the output type; see
+app/services/scope.py's module docstring.
 """
 
 from types import SimpleNamespace

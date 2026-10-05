@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # Tier 2: cheap utility model for lightweight tasks (currently: conversation titling
     # in app.services.titling; also suited to future summarization/classification work).
     openrouter_utility_model: str = "z-ai/glm-5.3-flash"
+    # Decision model for typed yes/no classification (currently: the scope guardrail in
+    # app.services.scope) — billed through the same OpenRouter account/key, called via
+    # pydantic-ai's SystemOneModel (a typed decision, not a chat completion).
+    openrouter_jev_model: str = "typesafe/jev-1.13"
 
     phoenix_api_key: str | None = None
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"
