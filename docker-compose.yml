@@ -1,0 +1,12 @@
+# Local Qdrant for the knowledge-base search tool (app/services/vector_store.py).
+# `docker compose up -d`, then `python -m scripts.ingest_knowledge_base`.
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  qdrant_data:

@@ -2,8 +2,8 @@
 
 LLM-output evals for the coach agent (`app/agents/coach_agent.py`), separate from
 `tests/` (which inject a fake agent and never call a real model). These evals run the
-*real* `get_coach_agent(user_id=None)` against OpenRouter and the live
-`ai-coach-mcp-server`, and score replies for scope/safety/tool-use/quality. They're
+*real* `get_coach_agent(user_id=None)` against OpenRouter (with the in-process
+coaching tools), and score replies for scope/safety/tool-use/quality. They're
 slow, non-deterministic, and cost real tokens — run them deliberately, not on every
 commit.
 
@@ -13,7 +13,7 @@ commit.
 
 - **Scope**: off-topic requests (coding help, trivia, movies) get declined and
   redirected, not answered.
-- **Tool use**: a request that gives enough info for a specific MCP tool
+- **Tool use**: a request that gives enough info for a specific coaching tool
   (`calculate_protein_intake`, `calculate_heart_rate_zones`, `calculate_power_zones`,
   `calculate_swim_pace_zones`, `search_knowledge_base`) actually triggers that tool.
 - **Safety**: symptom phrasing that's *not* caught by `app/services/safety.py`'s
@@ -42,8 +42,9 @@ python -m evals.run                  # pretty-prints a report table to stdout
 python -m evals.run --case "Off-topic: coding help"   # one case by name
 ```
 
-Requires `OPENROUTER_API_KEY` in `.env` (same as normal backend operation) and the
-MCP server running locally (`ai-coach-mcp-server`, port 8100) exactly like running the
+Requires `OPENROUTER_API_KEY` in `.env` (same as normal backend operation) and a
+populated local Qdrant (`docker compose up -d` + `python -m scripts.ingest_knowledge_base`)
+for the knowledge-base cases, exactly like running the
 backend for real — `evals/run.py` builds the agent via the same
 `app.agents.coach_agent.get_coach_agent` the FastAPI route uses, with no mocking.
 

@@ -32,28 +32,24 @@ def _request(headers: dict[str, str] | None = None):
 
 
 def test_anonymous_when_supabase_url_unset(monkeypatch):
-    monkeypatch.setenv("MCP_SERVER_URL", "http://localhost:8100/mcp")
     monkeypatch.delenv("SUPABASE_URL", raising=False)
 
     assert get_current_user_id(_request({"authorization": "Bearer whatever"})) is None
 
 
 def test_anonymous_when_no_authorization_header(monkeypatch):
-    monkeypatch.setenv("MCP_SERVER_URL", "http://localhost:8100/mcp")
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     assert get_current_user_id(_request()) is None
 
 
 def test_anonymous_when_header_not_bearer(monkeypatch):
-    monkeypatch.setenv("MCP_SERVER_URL", "http://localhost:8100/mcp")
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     assert get_current_user_id(_request({"authorization": "Basic abc"})) is None
 
 
 def test_anonymous_on_invalid_token(monkeypatch):
-    monkeypatch.setenv("MCP_SERVER_URL", "http://localhost:8100/mcp")
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
     monkeypatch.setattr(
         auth_module,
@@ -65,7 +61,6 @@ def test_anonymous_on_invalid_token(monkeypatch):
 
 
 def test_resolves_user_id_from_valid_token(monkeypatch):
-    monkeypatch.setenv("MCP_SERVER_URL", "http://localhost:8100/mcp")
     monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
 
     fake_signing_key = MagicMock(key="fake-key")

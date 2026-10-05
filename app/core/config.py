@@ -1,5 +1,7 @@
 from functools import lru_cache
+from urllib.parse import urlparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,8 +14,15 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000"
 
-    mcp_server_url: str
-    mcp_auth_token: str | None = None
+    # Qdrant backing the knowledge-base search tool (app/services/vector_store.py).
+    # Local dev default assumes `docker compose up -d`; production points at Qdrant
+    # Cloud, which also needs qdrant_api_key. Populate with scripts/ingest_knowledge_base.py.
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "coaching_kb"
+    # Embed server-side via Qdrant Cloud Inference instead of locally with fastembed.
+    # Unset = auto: on for a *.cloud.qdrant.io URL, off for local/self-hosted Qdrant.
+    qdrant_cloud_inference_override: bool | None = Field(default=None, alias="QDRANT_CLOUD_INFERENCE")
 
     openrouter_api_key: str | None = None
     # Tier 1: main coach conversation — tool-calling + tone-sensitive (incl. injury/physio advice).
@@ -52,6 +61,13 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def qdrant_cloud_inference(self) -> bool:
+        if self.qdrant_cloud_inference_override is not None:
+            return self.qdrant_cloud_inference_override
+        host = urlparse(self.qdrant_url).hostname or ""
+        return host.endswith(".cloud.qdrant.io")
 
 
 @lru_cache

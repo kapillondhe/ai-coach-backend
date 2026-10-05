@@ -11,17 +11,14 @@ cp .env.example .env
 
 ## Run
 
-Two processes: the [MCP server](https://github.com/kapillondhe/ai-coach-mcp-server)
-(fitness-coaching tools, its own repo) and this FastAPI backend, which calls it over
-HTTP through a Pydantic AI agent.
+One process: this FastAPI backend, whose Pydantic AI coach agent runs the
+fitness-coaching tools in-process (`app/tools/`). The knowledge-base search tool needs
+a Qdrant instance populated from `knowledge_base/`.
 
 ```bash
 source .venv/bin/activate
-
-# terminal 1 - MCP server (streamable HTTP on :8100); see the ai-coach-mcp-server repo
-python -m mcp_server
-
-# terminal 2 - backend (calls the MCP server via app/agents/coach_agent.py)
+docker compose up -d                     # local Qdrant (:6333)
+python -m scripts.ingest_knowledge_base  # first time, and after editing knowledge_base/*.md
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -29,7 +26,12 @@ Set `OPENROUTER_API_KEY` in `.env` for the coach agent to actually run (see `.en
 `OPENROUTER_MODEL` defaults to `google/gemini-2.5-flash` for the main coach conversation;
 `OPENROUTER_UTILITY_MODEL` defaults to `z-ai/glm-5.3-flash`, a cheaper model used for
 lightweight tasks like conversation titling.
-`MCP_SERVER_URL` (default `http://localhost:8100/mcp`) points the agent at the MCP server.
+`QDRANT_URL` (default `http://localhost:6333`, plus `QDRANT_API_KEY` for Qdrant Cloud)
+points the knowledge-base tool at Qdrant; if it's unreachable the tool returns no
+results and chat carries on without grounding. Production uses Qdrant Cloud, which
+computes embeddings server-side (Cloud Inference); locally the same model runs via
+fastembed. To (re-)load production's knowledge base:
+`QDRANT_URL=<cloud url> python -m scripts.ingest_knowledge_base` with `QDRANT_API_KEY` in `.env`.
 
 - API root: http://localhost:8000
 - Health: http://localhost:8000/api/health
@@ -56,9 +58,10 @@ app/
   api/routes/        one module per feature area (health, coach)
   core/config.py     env-driven settings (pydantic-settings)
   core/telemetry.py  OpenTelemetry export to Arize Phoenix (no-ops without PHOENIX_API_KEY)
-  agents/            Pydantic AI agents (coach_agent.py uses the MCP server as a toolset)
+  agents/            Pydantic AI agents (coach_agent.py wires in the coaching toolset + COROS)
+  tools/             in-process coaching tools (nutrition, zones, knowledge-base search)
+  services/          business logic incl. vector_store.py (Qdrant client for the knowledge base)
+knowledge_base/      curated coaching content (*.md), ingested into Qdrant
+scripts/             ingest_knowledge_base.py
 tests/
 ```
-
-The MCP server (fitness-coaching tools) lives in a separate repo:
-https://github.com/kapillondhe/ai-coach-mcp-server

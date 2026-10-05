@@ -9,9 +9,9 @@ from app.services.memory import MemoryData
 
 
 @pytest.mark.asyncio
-async def test_build_toolsets_anonymous_has_only_base_toolset(monkeypatch):
+async def test_build_toolsets_anonymous_has_only_coaching_toolset(monkeypatch):
     toolsets = await coach_agent._build_toolsets(user_id=None)
-    assert len(toolsets) == 1
+    assert toolsets == [coach_agent.coaching_toolset]
 
 
 @pytest.mark.asyncio
@@ -32,7 +32,7 @@ async def test_build_toolsets_signed_in_with_coros_connection(monkeypatch):
 
     toolsets = await coach_agent._build_toolsets(user_id="user-123")
 
-    assert len(toolsets) == 2  # base + COROS
+    assert len(toolsets) == 2  # coaching + COROS
     assert toolsets[1] is pooled  # reused pooled session, not a fresh MCPToolset
     get_toolset.assert_awaited_once_with("user-123", "a-token")
 
@@ -87,7 +87,7 @@ async def test_get_coach_agent_resolves_current_user_via_dependency_default(monk
     resolved_user_id = coach_agent.get_current_user_id()
     agent = await coach_agent.get_coach_agent(user_id=resolved_user_id)
 
-    assert len(agent.toolsets) == 3  # pydantic-ai internal function toolset + base + COROS
+    assert len(agent.toolsets) == 3  # pydantic-ai internal function toolset + coaching + COROS
 
 
 @pytest.mark.asyncio
@@ -288,7 +288,7 @@ def test_chat_route_resolves_user_id_through_real_dependency_chain(monkeypatch):
     monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
 
     client = TestClient(app)
-    # This will fail to actually reach OpenRouter/MCP (no network in tests),
+    # This will fail to actually reach OpenRouter (no network in tests),
     # so only assert on what we can observe before that: the resolved user_id.
     with contextlib.suppress(Exception):
         client.post("/api/coach/chat", json={"message": "hello"})

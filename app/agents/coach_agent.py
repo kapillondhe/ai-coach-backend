@@ -6,7 +6,6 @@ from functools import lru_cache
 from fastapi import Depends
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
-from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.models.system_one import SystemOneModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -18,6 +17,7 @@ from app.core.config import get_settings
 from app.services import coros_mcp, coros_oauth, memory_guardrail
 from app.services import memory as memory_service
 from app.services import safety as safety_service
+from app.tools import coaching_toolset
 
 logger = logging.getLogger(__name__)
 
@@ -148,19 +148,9 @@ def get_jev_model() -> SystemOneModel:
     return SystemOneModel(settings.openrouter_jev_model, provider=provider)
 
 
-@lru_cache
-def _base_toolset() -> MCPToolset:
-    """Our own MCP server's toolset — a single long-lived connection shared across requests.
-    """
-    settings = get_settings()
-    return MCPToolset(
-        client=settings.mcp_server_url,
-        headers={"Authorization": f"Bearer {settings.mcp_auth_token}"} if settings.mcp_auth_token else None,
-    )
-
-
 async def _build_toolsets(user_id: str | None) -> list[AbstractToolset]:
-    toolsets: list[AbstractToolset] = [_base_toolset()]
+    # Coaching tools run in-process; only COROS (a third-party MCP server) is remote.
+    toolsets: list[AbstractToolset] = [coaching_toolset]
 
     if user_id is not None:
         try:
