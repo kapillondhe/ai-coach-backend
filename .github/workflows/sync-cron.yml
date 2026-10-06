@@ -1,0 +1,22 @@
+name: Trigger COROS periodic sync
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /internal/sync/run
+        run: |
+          status=$(curl -s -o /tmp/sync_response.json -w "%{http_code}" \
+            -X POST "https://ai-coach-backend.fastapicloud.dev/api/internal/sync/run" \
+            -H "X-Internal-Sync-Secret: ${{ secrets.INTERNAL_SYNC_SECRET }}")
+          echo "HTTP status: $status"
+          cat /tmp/sync_response.json
+          if [ "$status" -ge 400 ]; then
+            echo "Sync trigger failed with status $status"
+            exit 1
+          fi
