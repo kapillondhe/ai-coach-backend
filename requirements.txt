@@ -1,14 +1,15 @@
+# Local dev install (prod builds from pyproject.toml's [project] dependencies).
+# Keep every pin here identical to pyproject.toml (dependencies + the dev extra).
 fastapi[standard]==0.141.1
 uvicorn[standard]==0.40.0
 pydantic==2.12.4
 pydantic-settings==2.13.0
 python-dotenv==1.2.1
 httpx==0.28.1
-pytest==9.0.1
-ruff==0.14.5
+httpx2==2.12.0
+cryptography==50.0.1
 
 pydantic-ai-slim[openai,mcp]==2.54.0
-pydantic-evals==2.54.0
 
 asyncpg==0.31.0
 sqlalchemy[asyncio]==2.0.54
@@ -24,3 +25,10 @@ opentelemetry-instrumentation-fastapi==0.65b0
 # embeds locally for dev/tests; production (pyproject.toml) skips it and embeds
 # server-side via Qdrant Cloud Inference.
 qdrant-client[fastembed]==1.19.0
+
+# Dev / test / evals only (pyproject.toml's `dev` extra).
+pytest==9.0.1
+pytest-asyncio==1.4.0
+ruff==0.14.5
+pyright==1.1.414
+pydantic-evals==2.54.0

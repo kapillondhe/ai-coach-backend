@@ -28,9 +28,7 @@ def _sample_data(**overrides) -> ProfileData:
 
 
 def test_get_profile_returns_defaults(monkeypatch):
-    monkeypatch.setattr(
-        profile_routes.profile_service, "get_or_create_profile", AsyncMock(return_value=_sample_data())
-    )
+    monkeypatch.setattr(profile_routes.profile_service, "get_or_create_profile", AsyncMock(return_value=_sample_data()))
     from fastapi.testclient import TestClient
 
     client = TestClient(app)
@@ -42,9 +40,7 @@ def test_get_profile_returns_defaults(monkeypatch):
 
 
 def test_patch_profile_updates_and_returns_fields(monkeypatch):
-    mock_update = AsyncMock(
-        return_value=_sample_data(weight_kg=70.0, field_sources={"weight_kg": "user"})
-    )
+    mock_update = AsyncMock(return_value=_sample_data(weight_kg=70.0, field_sources={"weight_kg": "user"}))
     monkeypatch.setattr(profile_routes.profile_service, "update_profile", mock_update)
     from fastapi.testclient import TestClient
 
@@ -53,9 +49,7 @@ def test_patch_profile_updates_and_returns_fields(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["weight_kg"] == 70.0
-    mock_update.assert_awaited_once_with(
-        "user-123", {"weight_kg": 70.0}, source="user"
-    )
+    mock_update.assert_awaited_once_with("user-123", {"weight_kg": 70.0}, source="user")
 
 
 def test_patch_profile_with_no_body_fields_does_not_call_update(monkeypatch):

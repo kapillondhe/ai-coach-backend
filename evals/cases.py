@@ -229,8 +229,7 @@ quality_cases = [
                     "balance, or a taper).",
                     "Check whether the advice is appropriate for a first-time marathoner "
                     "(not advanced/elite-level guidance).",
-                    "Check whether the reply is specific enough to act on, not just "
-                    "generic encouragement.",
+                    "Check whether the reply is specific enough to act on, not just generic encouragement.",
                 ],
                 score_range=(1, 5),
             ),
@@ -250,8 +249,7 @@ quality_cases = [
                     "Check whether the reply mentions a concrete fueling quantity or rate "
                     "(e.g. grams of carbs per hour) or at least a clear strategy.",
                     "Check whether hydration/electrolytes are addressed alongside carbs.",
-                    "Check whether the reply is specific to the 70.3 distance rather than "
-                    "generic nutrition advice.",
+                    "Check whether the reply is specific to the 70.3 distance rather than generic nutrition advice.",
                 ],
                 score_range=(1, 5),
             ),

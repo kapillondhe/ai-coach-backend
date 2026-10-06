@@ -1,7 +1,8 @@
-
 import logging
 import re
 from dataclasses import dataclass, field
+
+from app.core.models import Discipline
 
 logger = logging.getLogger(__name__)
 
@@ -10,14 +11,14 @@ _BIKE_CODES = {200, 201, 202, 203, 204, 205, 299}
 _SWIM_CODES = {300, 301}
 
 
-def discipline_for_sport_code(code: int) -> str:
+def discipline_for_sport_code(code: int) -> Discipline:
     if code in _RUN_CODES:
-        return "run"
+        return Discipline.RUN
     if code in _BIKE_CODES:
-        return "bike"
+        return Discipline.BIKE
     if code in _SWIM_CODES:
-        return "swim"
-    return "other"
+        return Discipline.SWIM
+    return Discipline.OTHER
 
 
 def _duration_to_seconds(text: str) -> int | None:
@@ -48,7 +49,7 @@ def _pace_to_sec_per_km(text: str) -> int | None:
 @dataclass
 class ParsedActivity:
     external_id: str
-    discipline: str
+    discipline: Discipline
     sport_type_code: int
     started_at_epoch: int | None
     ended_at_epoch: int | None
@@ -140,9 +141,7 @@ def parse_resting_heart_rate(text: str) -> list[ParsedDailyValue]:
     return values
 
 
-_AVG_HR_LINE_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2}):\s*(?:(\d+)\s*bpm\s*\(Min:\s*(\d+),\s*Max:\s*(\d+)\)|No data)$"
-)
+_AVG_HR_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}):\s*(?:(\d+)\s*bpm\s*\(Min:\s*(\d+),\s*Max:\s*(\d+)\)|No data)$")
 
 
 def parse_avg_heart_rate(text: str) -> list[ParsedDailyValue]:
@@ -199,13 +198,13 @@ def parse_training_load_assessment(text: str) -> list[ParsedDailyValue]:
             current_date = date_match.group(1)
             current = {}
             continue
-        if (m := _LOAD_COMMENT_RE.match(line)):
+        if m := _LOAD_COMMENT_RE.match(line):
             current["comment"] = m.group(1)
-        elif (m := _LOAD_SHORT_RE.match(line)):
+        elif m := _LOAD_SHORT_RE.match(line):
             current["short_term_load"] = float(m.group(1))
-        elif (m := _LOAD_LONG_RE.match(line)):
+        elif m := _LOAD_LONG_RE.match(line):
             current["long_term_load"] = float(m.group(1))
-        elif (m := _LOAD_RATIO_RE.match(line)):
+        elif m := _LOAD_RATIO_RE.match(line):
             current["load_ratio"] = float(m.group(1))
     _flush()
     return values
@@ -218,11 +217,11 @@ _RECOVERY_ETA_RE = re.compile(r"Estimated Full Recovery:\s*(.+)")
 
 def parse_recovery_status(text: str) -> dict:
     data: dict = {}
-    if (m := _RECOVERY_PCT_RE.search(text)):
+    if m := _RECOVERY_PCT_RE.search(text):
         data["recovery_pct"] = int(m.group(1))
-    if (m := _RECOVERY_LEVEL_RE.search(text)):
+    if m := _RECOVERY_LEVEL_RE.search(text):
         data["level"] = m.group(1).strip()
-    if (m := _RECOVERY_ETA_RE.search(text)):
+    if m := _RECOVERY_ETA_RE.search(text):
         data["estimated_full_recovery"] = m.group(1).strip()
     return data
 

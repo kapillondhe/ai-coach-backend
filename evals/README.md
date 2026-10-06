@@ -49,7 +49,7 @@ backend for real — `evals/run.py` builds the agent via the same
 `app.agents.coach_agent.get_coach_agent` the FastAPI route uses, with no mocking.
 
 The `LLMJudge`/`GEval` cases use the tier-2 utility model
-(`app.agents.coach_agent.get_utility_model()`) as the judge, not the pricier tier-1
+(`app.agents.models.get_utility_model()`) as the judge, not the pricier tier-1
 coach model, to keep judging cheap — see `set_default_judge_model` in `run.py`.
 
 ## Tool-trajectory evaluators need tracing enabled

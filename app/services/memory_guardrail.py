@@ -11,7 +11,7 @@ layer in front of the persist call that double-checks the decision instead of
 trusting the main model's instruction-following alone.
 
 Classification runs on Jev (TypeSafe's "System One" decision model) via
-`app.agents.coach_agent.get_jev_model()` — the same model/transport as the
+`app.agents.models.get_jev_model()` — the same model/transport as the
 scope guardrail, for the same latency/cost reasons (see
 `app.services.scope`'s module docstring).
 
@@ -24,6 +24,8 @@ import logging
 from typing import Annotated
 
 from pydantic_ai import Agent, BoolCriteria
+
+from app.agents.models import get_jev_model
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +57,6 @@ async def is_worth_remembering(fact: str) -> bool:
     decided was worth saving.
     """
     try:
-        # Imported lazily (not at module level) to avoid a circular import:
-        # app.agents.coach_agent imports this module to call is_worth_remembering
-        # from its `remember` tool.
-        from app.agents.coach_agent import get_jev_model
-
         agent = Agent(
             model=get_jev_model(),
             output_type=Annotated[bool, _WORTH_REMEMBERING_CRITERIA],

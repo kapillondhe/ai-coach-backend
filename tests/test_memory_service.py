@@ -3,31 +3,38 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import memory as memory_service
+from tests.fakes import FakeSession, stmt_kind, stmt_params
 
 
-class _FakeMemorySession:
+class _FakeMemorySession(FakeSession):
     def __init__(self, store: dict[str, list[dict]]):
+        super().__init__()
         self.store = store
 
-    async def execute(self, stmt):
-        compiled_type = type(stmt).__name__
+    async def handle(self, stmt):
+        compiled_type = stmt_kind(stmt)
+        params = stmt_params(stmt)
 
         if compiled_type == "Insert":
-            values = stmt.compile().params
-            self.store.setdefault(values["user_id"], []).append(dict(values))
+            self.store.setdefault(params["user_id"], []).append(params)
             return SimpleNamespace(first=lambda: None)
 
+        if compiled_type == "Select" and "count(" in str(stmt).lower():
+            (user_id,) = params.values()
+            count = len(self.store.get(user_id, []))
+            return SimpleNamespace(scalar_one=lambda: count)
+
         if compiled_type == "Select":
-            params = stmt.compile().params
             (user_id,) = [v for v in params.values() if isinstance(v, str)]
             rows = self.store.get(user_id, [])
             ordered = sorted(rows, key=lambda m: m["created_at"])
             return SimpleNamespace(
-                all=lambda: [SimpleNamespace(id=m["id"], content=m["content"], created_at=m["created_at"]) for m in ordered]
+                all=lambda: [
+                    SimpleNamespace(id=m["id"], content=m["content"], created_at=m["created_at"]) for m in ordered
+                ]
             )
 
         if compiled_type == "Delete":
-            params = stmt.compile().params
             memory_id = params["id_1"]
             user_id = params["user_id_1"]
             rows = self.store.get(user_id, [])
@@ -36,16 +43,7 @@ class _FakeMemorySession:
             deleted = before - len(self.store[user_id])
             return SimpleNamespace(rowcount=deleted)
 
-        raise AssertionError(f"Unexpected statement type: {compiled_type}")
-
-    async def commit(self):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
+        return await super().handle(stmt)
 
 
 @pytest.fixture
@@ -167,3 +165,30 @@ async def test_forget_does_not_delete_another_users_memory(store):
     assert deleted is False
     memories = await memory_service.list_memories("user-1")
     assert [m.content for m in memories] == ["first fact"]
+
+
+@pytest.mark.asyncio
+async def test_remember_raises_memory_full_at_stored_cap(store, monkeypatch):
+    monkeypatch.setattr(memory_service, "MAX_STORED_MEMORIES", 2)
+    await memory_service.remember("user-1", "first fact")
+    await memory_service.remember("user-1", "second fact")
+
+    with pytest.raises(memory_service.MemoryFullError):
+        await memory_service.remember("user-1", "third fact")
+
+    assert [m["content"] for m in store["user-1"]] == ["first fact", "second fact"]
+
+
+@pytest.mark.asyncio
+async def test_memory_cap_is_per_user(store, monkeypatch):
+    monkeypatch.setattr(memory_service, "MAX_STORED_MEMORIES", 1)
+    await memory_service.remember("user-1", "first fact")
+
+    data = await memory_service.remember("user-2", "other user's fact")
+
+    assert data.content == "other user's fact"
+
+
+def test_memory_bounds_are_consistent():
+    assert 0 < memory_service.MAX_PROMPT_MEMORIES <= memory_service.MAX_STORED_MEMORIES
+    assert memory_service.MAX_MEMORY_LENGTH > 0

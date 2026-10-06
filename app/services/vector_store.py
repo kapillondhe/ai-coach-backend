@@ -56,8 +56,12 @@ class VectorStore:
             collection_name=self._collection,
             vectors_config=models.VectorParams(size=EMBEDDING_DIM, distance=models.Distance.COSINE),
         )
-        self._client.create_payload_index(self._collection, field_name="domain", field_schema="keyword")
-        self._client.create_payload_index(self._collection, field_name="source", field_schema="keyword")
+        self._client.create_payload_index(
+            self._collection, field_name="domain", field_schema=models.PayloadSchemaType.KEYWORD
+        )
+        self._client.create_payload_index(
+            self._collection, field_name="source", field_schema=models.PayloadSchemaType.KEYWORD
+        )
 
     def upsert_chunks(self, chunks: list[dict[str, Any]]) -> None:
         """Each chunk: {"text": str, "source": str, "domain": str, "chunk_index": int}.
@@ -137,6 +141,7 @@ class VectorStore:
                 "score": point.score,
             }
             for point in result.points
+            if point.payload  # ingestion always sets a payload; skip anything malformed
         ]
 
 

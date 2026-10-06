@@ -7,6 +7,11 @@ def _format_pace(seconds_per_100m: float) -> str:
     return f"{minutes}:{seconds:02d} per 100m"
 
 
+def _fmt_offset(offset: float) -> str:
+    """Render a CSS offset in seconds with an explicit sign, e.g. '+8' or '-3'."""
+    return f"+{offset:g}" if offset >= 0 else f"{offset:g}"
+
+
 _HR_ZONES: list[tuple[int, str, float, float | None]] = [
     (1, "Recovery", 50, 60),
     (2, "Aerobic base / easy", 60, 70),
@@ -136,7 +141,8 @@ async def calculate_swim_pace_zones(css_pace_sec_per_100m: float) -> dict:
 
     zones = []
     for number, name, offset_min, offset_max in _SWIM_ZONES:
-        if offset_min is None and offset_max is None:
+        if offset_min is None:
+            # The all-out sprint zone: no pace bounds at all.
             zones.append(
                 {
                     "zone": number,
@@ -150,23 +156,18 @@ async def calculate_swim_pace_zones(css_pace_sec_per_100m: float) -> dict:
             )
             continue
 
-        bounds = [o for o in (offset_min, offset_max) if o is not None]
-        fast_offset = min(bounds)
-        slow_offset = max(bounds) if offset_max is not None and offset_min is not None else None
+        if offset_max is None:
+            fast_offset, slow_offset = offset_min, None
+            offset_range = f"CSS {_fmt_offset(offset_min)}+ sec/100m"
+        else:
+            fast_offset, slow_offset = min(offset_min, offset_max), max(offset_min, offset_max)
+            if offset_min == offset_max:
+                offset_range = f"CSS {_fmt_offset(offset_min)} sec/100m"
+            else:
+                offset_range = f"CSS {_fmt_offset(offset_min)} to {_fmt_offset(offset_max)} sec/100m"
 
         pace_sec_min = css_pace_sec_per_100m + fast_offset
         pace_sec_max = css_pace_sec_per_100m + slow_offset if slow_offset is not None else None
-
-        def _fmt_offset(o: float) -> str:
-            return f"+{o:g}" if o >= 0 else f"{o:g}"
-
-        assert offset_min is not None  # only the all-out sprint zone has no bounds, handled above
-        if offset_max is None:
-            offset_range = f"CSS {_fmt_offset(offset_min)}+ sec/100m"
-        elif offset_min == offset_max:
-            offset_range = f"CSS {_fmt_offset(offset_min)} sec/100m"
-        else:
-            offset_range = f"CSS {_fmt_offset(offset_min)} to {_fmt_offset(offset_max)} sec/100m"
 
         zones.append(
             {

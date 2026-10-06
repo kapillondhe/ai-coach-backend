@@ -2,40 +2,20 @@
 short-circuit off-topic messages to a canned redirect before the main coach
 agent ever runs.
 
-This exists because `coach_agent.SYSTEM_PROMPT`'s "Scope" instruction is not
-reliable enough on its own: even with an explicit "give zero opinion on the
-off-topic subject" rule and a worked example, the configured model (observed
-on z-ai/glm-5.3-flash) was still caught answering part of an off-topic
-question ("I'd give the edge to Denzel...") before redirecting — especially
-when the question is phrased casually ("just curious", "if you had to pick")
-after a few friendly on-topic turns. Same failure mode, and same fix shape, as
-`app.services.safety`'s emergency-regex pre-check: prompt instructions alone
-aren't a hard guarantee, so add a layer in front of the main model that can't
-be talked out of declining.
+Why: `coach_agent.SYSTEM_PROMPT`'s scope rule alone isn't reliable; models still
+partly answer casual off-topic asides after a few friendly turns. Like
+`app.services.safety`'s emergency pre-check, this layer can't be talked out of
+declining.
 
-Classification runs on Jev (TypeSafe's "System One" decision model) via
-`app.agents.coach_agent.get_jev_model()` — a real pydantic-ai `Agent` with
-`output_type=bool`, same as the pre-Jev approach, but on a `SystemOneModel`
-instead of a chat-completion model: Jev answers a typed yes/no question with
-a probability instead of generating and parsing free text. Routed through
-OpenRouter (same OPENROUTER_API_KEY as every other model here), so no
-separate TypeSafe account is needed. `pydantic-ai>=2.45` is required for
-`pydantic_ai.models.system_one`/`pydantic_ai.providers.system_one` to exist.
+How: a pydantic-ai `Agent` on Jev (`app.agents.models.get_jev_model()`), a typed
+yes/no decision model that was ~5x faster and 3-4x cheaper per call than the
+tier-2 utility model it replaced. It runs before every message, so latency matters.
 
-Chosen over the previous tier-2-utility-model approach for latency and cost:
-an early side-by-side on evals/cases.py's labeled cases showed roughly 5x
-lower latency and 3-4x lower cost per call — the generative call's biggest
-cost here was latency, since it runs before the user sees anything on every
-single message. NOTE: a later rerun of that same comparison, after switching
-to `BoolCriteria`/`Annotated[bool, ...]` for the output type, found Jev
-scoring 12/14 against the legacy approach's 14/14 on the same labeled set —
-accuracy parity has NOT been re-confirmed since that output-type change and
-should be re-verified (build a labeled eval script again, or extend
-evals/cases.py) before trusting this classifier's accuracy at face value.
+OPEN ISSUE: after switching to `BoolCriteria`/`Annotated[bool, ...]` output, Jev
+scored 12/14 vs the legacy classifier's 14/14 on evals/cases.py's labeled set;
+accuracy still needs re-verification before it's trusted at face value.
 
-Fails open (treats the message as on-topic) on any classifier error, so a
-transient model/API issue never blocks a legitimate training question from
-reaching the main agent.
+Fails open (treats the message as on-topic) on any classifier error.
 """
 
 import logging
@@ -44,7 +24,7 @@ from typing import Annotated
 from pydantic_ai import Agent, BoolCriteria
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-from app.agents.coach_agent import get_jev_model
+from app.agents.models import get_jev_model
 
 logger = logging.getLogger(__name__)
 

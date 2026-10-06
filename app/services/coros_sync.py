@@ -1,9 +1,9 @@
-
 import logging
 import uuid
+from collections.abc import Callable, Hashable, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from json import JSONDecodeError
 from json import loads as json_loads
 
@@ -15,15 +15,24 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.config import get_settings
 from app.core.db import get_session
-from app.core.models import IntegrationSyncState, SyncedActivity, SyncedDailyMetric, SyncedSnapshot
+from app.core.models import (
+    IntegrationSyncState,
+    SyncedActivity,
+    SyncedDailyMetric,
+    SyncedSnapshot,
+    SyncStatusValue,
+    UserIntegration,
+)
 from app.services import coros_oauth
 from app.services import coros_sync_parsers as parsers
+from app.services.coros_oauth import PROVIDER
 
 logger = logging.getLogger(__name__)
 
-PROVIDER = "coros"
 BACKFILL_WINDOW_DAYS = 28
 PERIODIC_SYNC_WINDOW_DAYS = 2  # cheap incremental catch-up, not a full re-pull each run
+# Rows per multi-row upsert statement; keeps bind params well under asyncpg's 32767 cap.
+UPSERT_BATCH_SIZE = 500
 
 
 class CorosSyncError(Exception):
@@ -61,9 +70,12 @@ async def _call_tool_text(session: ClientSession, name: str, arguments: dict) ->
         return text
 
 
-async def _set_sync_status(user_id: str, *, status: str, error: str | None = None) -> None:
+async def _set_sync_status(user_id: str, *, status: SyncStatusValue, error: str | None = None) -> None:
     stmt = pg_insert(IntegrationSyncState).values(
-        user_id=user_id, provider=PROVIDER, status=status, last_error=error if status == "error" else None
+        user_id=user_id,
+        provider=PROVIDER,
+        status=status,
+        last_error=error if status == SyncStatusValue.ERROR else None,
     )
     stmt = stmt.on_conflict_do_update(
         index_elements=[IntegrationSyncState.user_id, IntegrationSyncState.provider],
@@ -77,7 +89,7 @@ async def _set_sync_status(user_id: str, *, status: str, error: str | None = Non
 async def _mark_synced(user_id: str, *, backfill: bool) -> None:
     now = datetime.now(UTC)
     values = {
-        "status": "idle",
+        "status": SyncStatusValue.IDLE,
         "last_synced_at": now,
         "last_error": None,
     }
@@ -94,33 +106,51 @@ async def _mark_synced(user_id: str, *, backfill: bool) -> None:
         await db.commit()
 
 
+def _batches[T](rows: list[T]) -> Iterator[list[T]]:
+    for i in range(0, len(rows), UPSERT_BATCH_SIZE):
+        yield rows[i : i + UPSERT_BATCH_SIZE]
+
+
+def _last_per_key[T](rows: list[T], key: Callable[[T], Hashable]) -> list[T]:
+    """Drop earlier duplicates of a conflict key, keeping the last.
+
+    Postgres rejects one multi-row ON CONFLICT DO UPDATE that touches the same row
+    twice; the old one-statement-per-row loop let the last duplicate win.
+    """
+    return list({key(r): r for r in rows}.values())
+
+
+def _epoch_to_utc(epoch: int | None) -> datetime | None:
+    return datetime.fromtimestamp(epoch, tz=UTC) if epoch else None
+
+
 async def _upsert_activities(user_id: str, activities: list[parsers.ParsedActivity]) -> int:
     if not activities:
         return 0
     now = datetime.now(UTC)
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "provider": PROVIDER,
+            "external_id": act.external_id,
+            "discipline": act.discipline,
+            "sport_type_code": act.sport_type_code,
+            "started_at": _epoch_to_utc(act.started_at_epoch),
+            "ended_at": _epoch_to_utc(act.ended_at_epoch),
+            "duration_seconds": act.duration_seconds,
+            "distance_km": act.distance_km,
+            "avg_pace_sec_per_km": act.avg_pace_sec_per_km,
+            "avg_hr": act.avg_hr,
+            "calories": act.calories,
+            "raw_payload": {"text": act.raw_text},
+            "synced_at": now,
+        }
+        for act in _last_per_key(activities, lambda a: a.external_id)
+    ]
     async with get_session() as db:
-        for act in activities:
-            started_at = (
-                datetime.fromtimestamp(act.started_at_epoch, tz=UTC) if act.started_at_epoch else None
-            )
-            ended_at = datetime.fromtimestamp(act.ended_at_epoch, tz=UTC) if act.ended_at_epoch else None
-            stmt = pg_insert(SyncedActivity).values(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                provider=PROVIDER,
-                external_id=act.external_id,
-                discipline=act.discipline,
-                sport_type_code=act.sport_type_code,
-                started_at=started_at,
-                ended_at=ended_at,
-                duration_seconds=act.duration_seconds,
-                distance_km=act.distance_km,
-                avg_pace_sec_per_km=act.avg_pace_sec_per_km,
-                avg_hr=act.avg_hr,
-                calories=act.calories,
-                raw_payload={"text": act.raw_text},
-                synced_at=now,
-            )
+        for batch in _batches(rows):
+            stmt = pg_insert(SyncedActivity).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=[SyncedActivity.user_id, SyncedActivity.provider, SyncedActivity.external_id],
                 set_={
@@ -139,27 +169,29 @@ async def _upsert_activities(user_id: str, activities: list[parsers.ParsedActivi
             )
             await db.execute(stmt)
         await db.commit()
-    return len(activities)
+    return len(rows)
 
 
-async def _upsert_daily_metrics(
-    user_id: str, metric_type: str, values: list[parsers.ParsedDailyValue]
-) -> int:
+async def _upsert_daily_metrics(user_id: str, metric_type: str, values: list[parsers.ParsedDailyValue]) -> int:
     if not values:
         return 0
     now = datetime.now(UTC)
+    rows = [
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "provider": PROVIDER,
+            "metric_type": metric_type,
+            "date": v.date,
+            "value": v.value,
+            "extra": v.extra,
+            "synced_at": now,
+        }
+        for v in _last_per_key(values, lambda v: v.date)
+    ]
     async with get_session() as db:
-        for v in values:
-            stmt = pg_insert(SyncedDailyMetric).values(
-                id=str(uuid.uuid4()),
-                user_id=user_id,
-                provider=PROVIDER,
-                metric_type=metric_type,
-                date=v.date,
-                value=v.value,
-                extra=v.extra,
-                synced_at=now,
-            )
+        for batch in _batches(rows):
+            stmt = pg_insert(SyncedDailyMetric).values(batch)
             stmt = stmt.on_conflict_do_update(
                 index_elements=[
                     SyncedDailyMetric.user_id,
@@ -171,7 +203,7 @@ async def _upsert_daily_metrics(
             )
             await db.execute(stmt)
         await db.commit()
-    return len(values)
+    return len(rows)
 
 
 async def _insert_snapshot(user_id: str, snapshot_type: str, data: dict) -> None:
@@ -190,15 +222,19 @@ async def _insert_snapshot(user_id: str, snapshot_type: str, data: dict) -> None
         await db.commit()
 
 
-async def sync_user(user_id: str, *, days: int) -> None:
-    """Pull and store `days` worth of COROS data for one user. Raises CorosSyncError on failure."""
+async def sync_user(user_id: str, *, days: int, backfill: bool = False) -> None:
+    """Pull and store `days` worth of COROS data for one user. Raises CorosSyncError on failure.
+
+    `backfill=True` marks this as the initial full pull (sets last_backfill_completed_at).
+    """
     access_token = await coros_oauth.get_access_token(user_id)
     if access_token is None:
         raise CorosSyncError(f"User {user_id} has no active COROS connection")
 
-    await _set_sync_status(user_id, status="syncing")
+    await _set_sync_status(user_id, status=SyncStatusValue.SYNCING)
 
-    today = date.today()
+    # UTC, like every other "today" in the backend (the chat prompt's date included).
+    today = datetime.now(UTC).date()
     start = today - timedelta(days=days)
 
     try:
@@ -225,10 +261,10 @@ async def sync_user(user_id: str, *, days: int) -> None:
             recovery_text = await _call_tool_text(session, "queryRecoveryStatus", {})
             fitness_text = await _call_tool_text(session, "queryFitnessAssessmentOverview", {})
     except CorosSyncError:
-        await _set_sync_status(user_id, status="error", error="COROS MCP tool call failed")
+        await _set_sync_status(user_id, status=SyncStatusValue.ERROR, error="COROS MCP tool call failed")
         raise
     except Exception as exc:
-        await _set_sync_status(user_id, status="error", error=str(exc))
+        await _set_sync_status(user_id, status=SyncStatusValue.ERROR, error=str(exc))
         raise CorosSyncError(f"COROS MCP session failed for user {user_id}: {exc}") from exc
 
     try:
@@ -248,17 +284,19 @@ async def sync_user(user_id: str, *, days: int) -> None:
         if fitness:
             await _insert_snapshot(user_id, "fitness_assessment", fitness)
     except Exception as exc:
-        await _set_sync_status(user_id, status="error", error=f"Parsing/storage failed: {exc}")
+        await _set_sync_status(user_id, status=SyncStatusValue.ERROR, error=f"Parsing/storage failed: {exc}")
         raise CorosSyncError(f"Failed to parse/store COROS data for user {user_id}: {exc}") from exc
 
-    await _mark_synced(user_id, backfill=(days == BACKFILL_WINDOW_DAYS))
+    await _mark_synced(user_id, backfill=backfill)
 
 
 async def backfill_user(user_id: str) -> None:
     """Initial sync on COROS connect — trailing BACKFILL_WINDOW_DAYS. Never raises: logs and marks error."""
     try:
-        await sync_user(user_id, days=BACKFILL_WINDOW_DAYS)
-    except CorosSyncError:
+        await sync_user(user_id, days=BACKFILL_WINDOW_DAYS, backfill=True)
+    except Exception:
+        # Runs as a fire-and-forget BackgroundTask: a DB/token error (not just
+        # CorosSyncError) must not escape into the request's background runner.
         logger.exception("COROS backfill failed for user %s", user_id)
 
 
@@ -266,10 +304,10 @@ async def run_periodic_sync() -> dict[str, int]:
     """Re-sync every connected user's recent window. One user's failure never stops the batch."""
     async with get_session() as db:
         user_ids = (
-            await db.execute(select(coros_oauth.UserIntegration.user_id).where(
-                coros_oauth.UserIntegration.provider == PROVIDER
-            ))
-        ).scalars().all()
+            (await db.execute(select(UserIntegration.user_id).where(UserIntegration.provider == PROVIDER)))
+            .scalars()
+            .all()
+        )
 
     succeeded, failed = 0, 0
     for user_id in user_ids:
@@ -284,7 +322,7 @@ async def run_periodic_sync() -> dict[str, int]:
 
 @dataclass
 class SyncStatus:
-    status: str
+    status: SyncStatusValue
     last_synced_at: datetime | None
     last_backfill_completed_at: datetime | None
     last_error: str | None
@@ -305,7 +343,7 @@ async def get_sync_status(user_id: str) -> SyncStatus | None:
     if row is None:
         return None
     return SyncStatus(
-        status=row.status,
+        status=SyncStatusValue(row.status),
         last_synced_at=row.last_synced_at,
         last_backfill_completed_at=row.last_backfill_completed_at,
         last_error=row.last_error,

@@ -5,33 +5,25 @@ import pytest
 
 from app.services import conversation as conversation_service
 from app.services.conversation import ConversationNotFoundError, MessageData
+from tests.fakes import FakeSession, multirow_values, stmt_kind, stmt_params
 
 
-class _FakeConversationSession:
+class _FakeConversationSession(FakeSession):
     """In-memory fake standing in for get_session(), mirroring _FakeProfileSession's shape."""
 
     def __init__(self, conversations: dict, messages: dict):
+        super().__init__()
         self.conversations = conversations
         self.messages = messages
         self.insert_statements = 0
         self.select_statements = 0
 
-    async def execute(self, stmt):
-        compiled_type = type(stmt).__name__
+    async def handle(self, stmt):
+        compiled_type = stmt_kind(stmt)
 
         if compiled_type == "Insert":
-            values = stmt.compile().params
             table = stmt.table.name
-            # Multi-row inserts compile to suffixed params (`role_m0`, `role_m1`, ...).
-            if any(k.endswith("_m0") for k in values):
-                rows: dict[str, dict] = {}
-                for key, val in values.items():
-                    col, _, idx = key.rpartition("_m")
-                    rows.setdefault(idx, {})[col] = val
-                row_list = [rows[i] for i in sorted(rows, key=int)]
-            else:
-                row_list = [dict(values)]
-            for row in row_list:
+            for row in multirow_values(stmt):
                 if table == "conversations":
                     self.conversations[row["id"]] = row
                 elif table == "conversation_messages":
@@ -40,7 +32,7 @@ class _FakeConversationSession:
             return SimpleNamespace(first=lambda: None)
 
         if compiled_type == "Update":
-            params = stmt.compile().params
+            params = stmt_params(stmt)
             conv_id = params.get("id_1")
             owner = params.get("user_id_1")
             row = self.conversations.get(conv_id)
@@ -53,26 +45,22 @@ class _FakeConversationSession:
 
         if compiled_type == "Delete":
             table = stmt.table.name
-            params = stmt.compile().params
+            params = stmt_params(stmt)
             str_params = [v for v in params.values() if isinstance(v, str)]
 
             if table == "conversations":
                 matches = [c for c in self.conversations.values() if all(v in c.values() for v in str_params)]
                 for c in matches:
                     del self.conversations[c["id"]]
+                    # Mirrors conversation_messages' FK ON DELETE CASCADE in Postgres.
+                    self.messages.pop(c["id"], None)
                 return SimpleNamespace(rowcount=len(matches))
-
-            if table == "conversation_messages":
-                (conversation_id,) = str_params
-                removed = len(self.messages.get(conversation_id, []))
-                self.messages.pop(conversation_id, None)
-                return SimpleNamespace(rowcount=removed)
 
             raise AssertionError(f"Unhandled delete table: {table}")
 
         if compiled_type == "Select":
             from_ = stmt.get_final_froms()[0]
-            params = stmt.compile().params
+            params = stmt_params(stmt)
             str_params = [v for v in params.values() if isinstance(v, str)]
 
             if from_.__class__.__name__.endswith("Join"):
@@ -115,19 +103,7 @@ class _FakeConversationSession:
 
             raise AssertionError(f"Unhandled select table: {table_name}")
 
-        raise AssertionError(f"Unexpected statement type: {compiled_type}")
-
-    async def commit(self):
-        pass
-
-    async def rollback(self):
-        pass
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
+        return await super().handle(stmt)
 
 
 @pytest.fixture
@@ -190,9 +166,7 @@ async def test_append_messages_raises_for_wrong_user(store):
     conversation_id = await conversation_service.create_conversation("user-1")
 
     with pytest.raises(ConversationNotFoundError):
-        await conversation_service.append_messages(
-            conversation_id, "user-2", [MessageData(role="user", content="hi")]
-        )
+        await conversation_service.append_messages(conversation_id, "user-2", [MessageData(role="user", content="hi")])
 
     assert store["messages"] == {}
 
@@ -229,9 +203,7 @@ async def test_append_messages_writes_a_turn_in_one_insert_and_keeps_order(store
 @pytest.mark.asyncio
 async def test_get_conversation_uses_a_single_query(store):
     conversation_id = await conversation_service.create_conversation("user-1")
-    await conversation_service.append_messages(
-        conversation_id, "user-1", [MessageData(role="user", content="hi")]
-    )
+    await conversation_service.append_messages(conversation_id, "user-1", [MessageData(role="user", content="hi")])
     store["sessions"].clear()
 
     await conversation_service.get_conversation(conversation_id, "user-1")
@@ -263,14 +235,13 @@ async def test_list_conversations_scoped_to_user(store):
 @pytest.mark.asyncio
 async def test_delete_conversation_removes_conversation_and_messages(store):
     conversation_id = await conversation_service.create_conversation("user-1")
-    await conversation_service.append_messages(
-        conversation_id, "user-1", [MessageData(role="user", content="hi")]
-    )
+    await conversation_service.append_messages(conversation_id, "user-1", [MessageData(role="user", content="hi")])
 
     deleted = await conversation_service.delete_conversation(conversation_id, "user-1")
 
     assert deleted is True
     assert conversation_id not in store["conversations"]
+    assert conversation_id not in store["messages"]
     with pytest.raises(ConversationNotFoundError):
         await conversation_service.get_conversation(conversation_id, "user-1")
 

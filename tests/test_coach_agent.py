@@ -127,9 +127,7 @@ async def test_build_system_prompt_signed_in_injects_stored_memories(monkeypatch
 
 @pytest.mark.asyncio
 async def test_build_system_prompt_degrades_gracefully_on_memory_lookup_failure(monkeypatch):
-    monkeypatch.setattr(
-        coach_agent.memory_service, "list_memories", AsyncMock(side_effect=RuntimeError("DB is down"))
-    )
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(side_effect=RuntimeError("DB is down")))
 
     # Must not raise — a memory-store failure can never break core chat.
     prompt = await coach_agent._build_system_prompt(user_id="user-123")
@@ -204,6 +202,61 @@ async def test_remember_tool_skips_persisting_when_jev_guardrail_declines(monkey
     remember_mock.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_build_system_prompt_caps_injected_memories_to_newest(monkeypatch):
+    cap = coach_agent.memory_service.MAX_PROMPT_MEMORIES
+    memories = [MemoryData(id=f"m{i}", content=f"fact-{i:03d}", created_at=None) for i in range(cap + 10)]
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=memories))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    injected = [line[2:] for line in prompt.splitlines() if line.startswith("- fact-")]
+    assert injected == [f"fact-{i:03d}" for i in range(10, cap + 10)]  # newest N, oldest-first
+
+
+async def _remember_tool(monkeypatch, *, worth=True):
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    monkeypatch.setattr(coach_agent.memory_guardrail, "is_worth_remembering", AsyncMock(return_value=worth))
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+    return agent.toolsets[0].tools["remember"]
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_rejects_overlong_fact_with_model_retry(monkeypatch):
+    remember_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.memory_service, "remember", remember_mock)
+    tool = await _remember_tool(monkeypatch)
+
+    with pytest.raises(ModelRetry, match="shor"):
+        await tool.function("x" * (coach_agent.memory_service.MAX_MEMORY_LENGTH + 1))
+
+    remember_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_accepts_fact_at_length_limit(monkeypatch):
+    remember_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.memory_service, "remember", remember_mock)
+    tool = await _remember_tool(monkeypatch)
+
+    assert await tool.function("x" * coach_agent.memory_service.MAX_MEMORY_LENGTH) == "Noted."
+
+
+@pytest.mark.asyncio
+async def test_remember_tool_reports_full_memory_instead_of_crashing(monkeypatch):
+    monkeypatch.setattr(
+        coach_agent.memory_service,
+        "remember",
+        AsyncMock(side_effect=coach_agent.memory_service.MemoryFullError("user-123")),
+    )
+    tool = await _remember_tool(monkeypatch)
+
+    result = await tool.function("Training for a first 70.3")
+
+    assert "full" in result.lower()
+
+
 def _get_output_validator_func(agent):
     """Pull out the plain validator function registered via @agent.output_validator.
 
@@ -233,8 +286,7 @@ async def test_output_validator_retries_on_system_prompt_leak():
     agent = await coach_agent.get_coach_agent(user_id=None)
     validator = _get_output_validator_func(agent)
     reply = coach_agent.CoachReply(
-        reply="As stated in my prompt safety instructions, I am an encouraging, "
-        "knowledgeable fitness coach for endurance sports.",
+        reply="As stated in my instructions: you are an encouraging, knowledgeable fitness coach for endurance sports.",
         suggestions=[],
     )
 
@@ -266,6 +318,23 @@ async def test_output_validator_allows_red_flag_reply_with_deferral():
     )
 
     assert validator(reply) is reply
+
+
+@pytest.mark.asyncio
+async def test_output_validator_allows_red_flag_reply_naming_medical_red_flags():
+    # Regression: "medical red flags" used to count as a system-prompt leak.
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    validator = _get_output_validator_func(agent)
+    reply = coach_agent.CoachReply(
+        reply="Numbness and loss of bladder control are medical red flags, see a doctor now.",
+        suggestions=[],
+    )
+
+    assert validator(reply) is reply
+
+
+def test_system_prompt_does_not_claim_a_workout_logging_tool():
+    assert "log and look up" not in coach_agent.SYSTEM_PROMPT
 
 
 def test_chat_route_resolves_user_id_through_real_dependency_chain(monkeypatch):

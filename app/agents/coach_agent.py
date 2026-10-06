@@ -1,19 +1,14 @@
 import asyncio
 import logging
 from datetime import UTC, datetime
-from functools import lru_cache
 
 from fastapi import Depends
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ModelRetry, TextOutput, ToolOutput
-from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
-from pydantic_ai.models.system_one import SystemOneModel
-from pydantic_ai.providers.openrouter import OpenRouterProvider
-from pydantic_ai.providers.system_one import SystemOneProvider
 from pydantic_ai.toolsets import AbstractToolset
 
+from app.agents.models import get_coach_model
 from app.core.auth import get_current_user_id
-from app.core.config import get_settings
 from app.services import coros_mcp, coros_oauth, memory_guardrail
 from app.services import memory as memory_service
 from app.services import safety as safety_service
@@ -23,8 +18,9 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an encouraging, knowledgeable fitness coach for endurance sports "
-    "(running, cycling, swimming, triathlon). Use the available tools to log and "
-    "look up a user's workouts before giving advice.\n\n"
+    "(running, cycling, swimming, triathlon). Before giving advice, use the "
+    "available tools: the training calculators, the knowledge-base search, and "
+    "the user's connected-device data when it's available.\n\n"
     "Scope: only answer questions related to endurance-sports training, "
     "nutrition, recovery, gear, and racing. If asked something unrelated (e.g. "
     "general trivia, coding help, movies, actors, celebrities, politics, "
@@ -43,11 +39,11 @@ SYSTEM_PROMPT = (
     "decline plus a redirect to training — nothing about the off-topic "
     "subject at all, not as a joke, not as color, not as a concession to be "
     "friendly. Example — user: \"lol anyway who's the better actor, Tom Hanks "
-    "or Denzel Washington?\" A WRONG reply picks one of them before "
+    'or Denzel Washington?" A WRONG reply picks one of them before '
     "redirecting (that is a scope violation even with a redirect attached). "
     "The ONLY correct reply is something like: \"Ha, that's outside my lane as "
     "a training coach — I'll leave the movie takes to someone else! Want help "
-    "with your training plan instead?\" — note it names zero actors and gives "
+    'with your training plan instead?" — note it names zero actors and gives '
     "zero opinion on acting.\n\n"
     "Medical red flags: you are a coach, not a medical professional. If a user "
     "describes symptoms that could indicate a medical emergency or a condition "
@@ -66,7 +62,7 @@ SYSTEM_PROMPT = (
     "After writing your reply, also fill in `suggestions`: 0 to 3 short "
     "(under ~8 words), first-person follow-up messages the user might "
     "plausibly send next, phrased as if the user were typing them (e.g. "
-    "\"How much protein do I need?\"), directly relevant to what was just "
+    '"How much protein do I need?"), directly relevant to what was just '
     "discussed. Leave it empty if nothing natural fits — don't force it. "
     "Never invent specific personal data (a body weight, pace, time, age, "
     "etc.) in a suggestion as if the user had said it. If your reply is "
@@ -104,50 +100,6 @@ _MEMORY_TOOL_DESCRIPTION = (
 )
 
 
-@lru_cache
-def _get_model() -> OpenRouterModel:
-    """Tier 1: main coach conversation model — tool-calling + tone-sensitive.
-
-    Reasoning effort is pinned to the lowest setting: this model's OpenRouter
-    endpoint requires reasoning (it 400s if asked to disable it entirely), but
-    minimal effort still cuts most of the hidden chain-of-thought latency that
-    piles up before every reply and every tool call.
-    """
-    settings = get_settings()
-    return OpenRouterModel(
-        settings.openrouter_model,
-        provider=OpenRouterProvider(api_key=settings.openrouter_api_key),
-        settings=OpenRouterModelSettings(openrouter_reasoning={"effort": "minimal"}),
-    )
-
-
-@lru_cache
-def get_utility_model() -> OpenRouterModel:
-    """Tier 2: cheap utility model for lightweight tasks (summarization, classification,
-    titling). Used by app.services.titling for conversation title generation."""
-    settings = get_settings()
-    return OpenRouterModel(
-        settings.openrouter_utility_model,
-        provider=OpenRouterProvider(api_key=settings.openrouter_api_key),
-    )
-
-
-@lru_cache
-def get_jev_model() -> SystemOneModel:
-    """Decision model (TypeSafe's Jev) for typed yes/no/choice classification — used by
-    app.services.scope for the off-topic guardrail.
-
-    Routed through OpenRouter's `/v1/systemone`-compatible endpoint via `SystemOneModel`
-    + `SystemOneProvider` (billed to the same OPENROUTER_API_KEY as every other model
-    here) rather than `pydantic_ai.models.typesafe.TypeSafeModel`, which talks directly
-    to TypeSafe's own API and needs a separate TYPESAFE_API_KEY/account — no reason to
-    add that dependency when OpenRouter already serves the same model.
-    """
-    settings = get_settings()
-    provider = SystemOneProvider(base_url="https://openrouter.ai/api", api_key=settings.openrouter_api_key)
-    return SystemOneModel(settings.openrouter_jev_model, provider=provider)
-
-
 async def _build_toolsets(user_id: str | None) -> list[AbstractToolset]:
     # Coaching tools run in-process; only COROS (a third-party MCP server) is remote.
     toolsets: list[AbstractToolset] = [coaching_toolset]
@@ -180,7 +132,7 @@ def _dated_system_prompt() -> str:
     today = datetime.now(UTC).strftime("%A, %Y-%m-%d")
     return (
         f"Today's date is {today} (UTC). Use this as the reference point for any "
-        "relative date range (e.g. \"this week\", \"last activity\", \"yesterday\") and "
+        'relative date range (e.g. "this week", "last activity", "yesterday") and '
         "for any date arguments a tool call requires — never guess or assume a date "
         f"from training data.\n\n{SYSTEM_PROMPT}"
     )
@@ -201,6 +153,8 @@ async def _build_system_prompt(user_id: str | None) -> str:
     if not memories:
         return base_prompt
 
+    # Newest N only, still oldest-first, so prompt size stays bounded however many are stored.
+    memories = memories[-memory_service.MAX_PROMPT_MEMORIES :]
     bullets = "\n".join(f"- {m.content}" for m in memories)
     prompt = f"{base_prompt}\n\nThings you remember about this user from past conversations:\n{bullets}"
     logger.info("Injecting %d stored memories into system prompt for user %s", len(memories), user_id)
@@ -214,7 +168,7 @@ async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) ->
         _build_system_prompt(user_id),
     )
     agent = Agent(
-        model=_get_model(),
+        model=get_coach_model(),
         output_type=[ToolOutput(CoachReply), TextOutput(_reply_from_plain_text)],
         toolsets=toolsets,
         system_prompt=system_prompt,
@@ -253,10 +207,22 @@ async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) ->
 
         @agent.tool_plain(description=_MEMORY_TOOL_DESCRIPTION)
         async def remember(fact: str) -> str:
+            if len(fact) > memory_service.MAX_MEMORY_LENGTH:
+                raise ModelRetry(
+                    f"That fact is {len(fact)} characters; the limit is "
+                    f"{memory_service.MAX_MEMORY_LENGTH}. Restate it as one short sentence."
+                )
             if not await memory_guardrail.is_worth_remembering(fact):
                 logger.info("Jev guardrail declined to persist candidate memory for user %s", user_id)
                 return "Not saved — not durable/specific enough to remember long-term."
-            await memory_service.remember(user_id, fact)
+            try:
+                await memory_service.remember(user_id, fact)
+            except memory_service.MemoryFullError:
+                logger.info("Memory full for user %s; not saving new fact", user_id)
+                return (
+                    f"Not saved — this user's memory is full ({memory_service.MAX_STORED_MEMORIES} "
+                    "facts). If it matters, tell them they can delete old memories to make room."
+                )
             return "Noted."
 
     return agent

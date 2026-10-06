@@ -11,7 +11,7 @@ class HealthResponse(BaseModel):
     environment: str
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health")
 async def health() -> HealthResponse:
     settings = get_settings()
     return HealthResponse(status="ok", environment=settings.environment)

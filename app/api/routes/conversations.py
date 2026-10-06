@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/conversations", tags=["conversations"])
 class ConversationSummaryResponse(BaseModel):
     id: str
     title: str | None
-    updated_at: str
+    updated_at: datetime
 
 
 class ConversationMessageResponse(BaseModel):
@@ -29,19 +30,18 @@ class ConversationDetailResponse(BaseModel):
     messages: list[ConversationMessageResponse]
 
 
+class ConversationDeletedResponse(BaseModel):
+    deleted: bool
+
+
 @router.get("")
 async def list_conversations(user_id: str = Depends(require_user_id)) -> list[ConversationSummaryResponse]:
     summaries = await conversation_service.list_conversations(user_id)
-    return [
-        ConversationSummaryResponse(id=s.id, title=s.title, updated_at=s.updated_at.isoformat())
-        for s in summaries
-    ]
+    return [ConversationSummaryResponse(id=s.id, title=s.title, updated_at=s.updated_at) for s in summaries]
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(
-    conversation_id: str, user_id: str = Depends(require_user_id)
-) -> ConversationDetailResponse:
+async def get_conversation(conversation_id: str, user_id: str = Depends(require_user_id)) -> ConversationDetailResponse:
     try:
         data = await conversation_service.get_conversation(conversation_id, user_id)
     except ConversationNotFoundError as exc:
@@ -56,8 +56,8 @@ async def get_conversation(
 @router.delete("/{conversation_id}")
 async def delete_conversation(
     conversation_id: str, user_id: str = Depends(require_user_id)
-) -> dict[str, bool]:
+) -> ConversationDeletedResponse:
     deleted = await conversation_service.delete_conversation(conversation_id, user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    return {"deleted": True}
+    return ConversationDeletedResponse(deleted=True)

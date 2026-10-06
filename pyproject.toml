@@ -10,7 +10,8 @@ dependencies = [
     "python-dotenv==1.2.1",
     "httpx==0.28.1",
     "pydantic-ai-slim[openai,mcp]==2.54.0",
-    "pydantic-evals==2.54.0",
+    # Imported directly by app/services/coros_sync.py (also arrives via mcp; pinned so it can't drift away).
+    "httpx2==2.12.0",
     "cryptography==50.0.1",
     "asyncpg==0.31.0",
     "sqlalchemy[asyncio]==2.0.54",
@@ -26,7 +27,15 @@ dependencies = [
 
 [project.optional-dependencies]
 # fastembed embeds locally for dev (local Qdrant) and tests (QdrantClient(":memory:")).
-dev = ["pytest==9.0.1", "pytest-asyncio==1.4.0", "ruff==0.14.5", "qdrant-client[fastembed]==1.19.0"]
+# pydantic-evals is only used by evals/ (not imported by app/); keep its pin equal to pydantic-ai-slim's.
+dev = [
+    "pytest==9.0.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.14.5",
+    "pyright==1.1.414",
+    "pydantic-evals==2.54.0",
+    "qdrant-client[fastembed]==1.19.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
@@ -58,3 +67,10 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
+
+[tool.pyright]
+include = ["app", "scripts", "migrations"]
+typeCheckingMode = "basic"
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"

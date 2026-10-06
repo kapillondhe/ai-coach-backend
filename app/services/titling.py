@@ -1,9 +1,8 @@
-
 import logging
 
 from pydantic_ai import Agent
 
-from app.agents.coach_agent import get_utility_model
+from app.agents.models import get_utility_model
 from app.services import conversation as conversation_service
 
 logger = logging.getLogger(__name__)

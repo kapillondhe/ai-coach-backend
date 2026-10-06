@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     app_name: str = "AI Coach API"
     environment: str = "development"
-    debug: bool = True
+    debug: bool = False
 
     cors_origins: str = "http://localhost:3000"
 
@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str | None = None
     # Tier 1: main coach conversation — tool-calling + tone-sensitive (incl. injury/physio advice).
-    openrouter_model: str = "google/gemini-2.5-flash"
+    openrouter_model: str = "z-ai/glm-5.3-flash"
     # Tier 2: cheap utility model for lightweight tasks (currently: conversation titling
     # in app.services.titling; also suited to future summarization/classification work).
     openrouter_utility_model: str = "z-ai/glm-5.3-flash"
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # app.services.scope) — billed through the same OpenRouter account/key, called via
     # pydantic-ai's SystemOneModel (a typed decision, not a chat completion).
     openrouter_jev_model: str = "typesafe/jev-1.13"
+
+    # Max requests per minute to /api/coach/chat and /chat/stream, per signed-in user
+    # (else per client IP); 0 disables. Enforced in-process, so each worker counts
+    # separately (app/core/rate_limit.py).
+    chat_rate_limit_per_minute: int = 20
 
     phoenix_api_key: str | None = None
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"
@@ -44,7 +49,6 @@ class Settings(BaseSettings):
 
     token_encryption_key: str | None = None
 
-
     coros_mcp_server_url: str = "https://mcp.coros.com/mcp"
     coros_redirect_uri: str = "http://localhost:8000/api/integrations/coros/callback"
 
@@ -52,10 +56,7 @@ class Settings(BaseSettings):
 
     frontend_url: str = "http://localhost:3000"
 
-
     supabase_url: str | None = None
-
-
     supabase_jwt_audience: str = "authenticated"
 
     @property
@@ -72,4 +73,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # Required fields (database_url) come from the environment / .env, which pyright can't see.
+    return Settings()  # pyright: ignore[reportCallIssue]

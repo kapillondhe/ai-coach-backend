@@ -1,4 +1,3 @@
-
 import logging
 from functools import lru_cache
 
@@ -8,6 +7,7 @@ from fastapi import Depends, HTTPException, Request
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
 
 @lru_cache
 def _jwks_client(supabase_url: str) -> "jwt.PyJWKClient":

@@ -41,9 +41,7 @@ async def get_profile(user_id: str = Depends(require_user_id)) -> ProfileRespons
 
 
 @router.patch("")
-async def patch_profile(
-    body: ProfileUpdateRequest, user_id: str = Depends(require_user_id)
-) -> ProfileResponse:
+async def patch_profile(body: ProfileUpdateRequest, user_id: str = Depends(require_user_id)) -> ProfileResponse:
     updates = body.model_dump(exclude_unset=True)
     if not updates:
         data = await profile_service.get_or_create_profile(user_id)

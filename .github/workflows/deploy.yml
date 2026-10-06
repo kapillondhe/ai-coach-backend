@@ -2,8 +2,26 @@ name: Deploy to FastAPI Cloud
 on:
   push:
     branches: [main]
+  pull_request:
+
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+      - run: uv venv && uv pip install -e ".[dev]"
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pyright
+      # tests/conftest.py supplies dummy settings, so no secrets/DB/network are needed.
+      - run: uv run --no-sync pytest -q
+
   deploy:
+    needs: checks
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -19,7 +19,8 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from pydantic_ai import Agent
 
-from app.agents.coach_agent import CoachReply, get_coach_agent, get_utility_model
+from app.agents.coach_agent import CoachReply, get_coach_agent
+from app.agents.models import get_utility_model
 from evals.cases import all_cases
 from evals.evaluators import DefersToMedicalCare, NoSystemPromptLeak
 
@@ -92,11 +93,9 @@ async def main() -> int:
     report = await dataset.evaluate(_run_coach_turn, max_concurrency=args.max_concurrency)
     report.print(include_input=True, include_output=True, include_reasons=True)
 
-    any_failed = any(
-        not result.value
-        for case in report.cases
-        for result in case.assertions.values()
-    ) or bool(report.failures)
+    any_failed = any(not result.value for case in report.cases for result in case.assertions.values()) or bool(
+        report.failures
+    )
     return 1 if any_failed else 0
 
 

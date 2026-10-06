@@ -1,13 +1,15 @@
+import asyncio
 import base64
 import contextlib
 import hashlib
+import logging
 import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import delete, select, update
+from sqlalchemy import Row, delete, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -17,6 +19,10 @@ from app.core.models import OAuthClient, OAuthState, UserIntegration
 from app.services import coros_mcp
 from app.services.token_crypto import decrypt_token, encrypt_token
 
+logger = logging.getLogger(__name__)
+
+# The one `provider` value for COROS rows in the provider-keyed integration and
+# sync tables. Other COROS modules import it from here.
 PROVIDER = "coros"
 SCOPES = "openid mcp.tools offline_access"
 STATE_TTL = timedelta(minutes=10)
@@ -34,6 +40,14 @@ REGISTRATION_ENDPOINT = f"{ISSUER}/connect/register"
 # it explicitly since the window is short.
 _NOT_CONNECTED_CACHE_TTL = 60.0
 _not_connected_cache: dict[str, float] = {}
+
+# Refresh a token that expires within this window, so it can't expire mid-chat.
+REFRESH_MARGIN = timedelta(minutes=5)
+
+# One lock per user so concurrent requests refresh once instead of racing (COROS may
+# rotate refresh tokens, and a losing racer would store a dead one). Per-process
+# only: separate workers/instances can still refresh concurrently.
+_refresh_locks: dict[str, asyncio.Lock] = {}
 
 
 class CorosOAuthError(Exception):
@@ -220,14 +234,14 @@ async def get_status(user_id: str) -> ConnectionStatus:
     return ConnectionStatus(connected=True, connected_at=row.connected_at)
 
 
-async def get_access_token(user_id: str) -> str | None:
-    """Return a usable (refreshing if needed) access token for this user's COROS connection, or None if not connected."""
-    cached_at = _not_connected_cache.get(user_id)
-    if cached_at is not None and time.monotonic() - cached_at < _NOT_CONNECTED_CACHE_TTL:
-        return None
+async def is_connected(user_id: str) -> bool:
+    """Whether this user has a stored COROS connection."""
+    return (await get_status(user_id)).connected
 
+
+async def _load_token_row(user_id: str) -> Row | None:
     async with get_session() as session:
-        row = (
+        return (
             await session.execute(
                 select(
                     UserIntegration.access_token_encrypted,
@@ -236,14 +250,45 @@ async def get_access_token(user_id: str) -> str | None:
                 ).where(UserIntegration.user_id == user_id, UserIntegration.provider == PROVIDER)
             )
         ).first()
+
+
+def _needs_refresh(row: Row) -> bool:
+    return (
+        row.expires_at is not None
+        and bool(row.refresh_token_encrypted)
+        and row.expires_at - REFRESH_MARGIN <= datetime.now(UTC)
+    )
+
+
+async def get_access_token(user_id: str) -> str | None:
+    """Return a usable (refreshing if needed) access token for this user's COROS connection, or None if not connected."""
+    cached_at = _not_connected_cache.get(user_id)
+    if cached_at is not None and time.monotonic() - cached_at < _NOT_CONNECTED_CACHE_TTL:
+        return None
+
+    row = await _load_token_row(user_id)
     if row is None:
         _not_connected_cache[user_id] = time.monotonic()
         return None
+    if not _needs_refresh(row):
+        return decrypt_token(row.access_token_encrypted)
 
-    if row.expires_at is not None and row.expires_at < datetime.now(UTC) and row.refresh_token_encrypted:
-        return await _refresh(user_id, decrypt_token(row.refresh_token_encrypted))
-
-    return decrypt_token(row.access_token_encrypted)
+    async with _refresh_locks.setdefault(user_id, asyncio.Lock()):
+        # Re-read inside the lock: if another request refreshed while we waited,
+        # use its new token rather than spending the (possibly rotated) refresh token again.
+        row = await _load_token_row(user_id)
+        if row is None:
+            return None
+        if not _needs_refresh(row):
+            return decrypt_token(row.access_token_encrypted)
+        try:
+            return await _refresh(user_id, decrypt_token(row.refresh_token_encrypted))
+        except CorosOAuthError:
+            # Refreshing early (inside the margin) failed, but the current token still works.
+            if row.expires_at > datetime.now(UTC):
+                logger.warning("Early COROS token refresh failed for user %s; using current token", user_id)
+                return decrypt_token(row.access_token_encrypted)
+            raise
 
 
 async def _refresh(user_id: str, refresh_token: str) -> str:
@@ -310,9 +355,7 @@ async def disconnect(user_id: str) -> None:
     try:
         async with get_session() as session:
             await session.execute(
-                delete(UserIntegration).where(
-                    UserIntegration.user_id == user_id, UserIntegration.provider == PROVIDER
-                )
+                delete(UserIntegration).where(UserIntegration.user_id == user_id, UserIntegration.provider == PROVIDER)
             )
             await session.commit()
     except SQLAlchemyError as exc:

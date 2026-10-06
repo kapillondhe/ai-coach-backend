@@ -27,9 +27,9 @@ def test_list_memories_returns_stored_facts(monkeypatch):
     response = client.get("/api/memories")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body[0]["id"] == "mem-1"
-    assert body[0]["content"] == "Training for a first 70.3"
+    assert response.json() == [
+        {"id": "mem-1", "content": "Training for a first 70.3", "created_at": "2026-01-01T00:00:00Z"}
+    ]
 
 
 def test_delete_memory_returns_success(monkeypatch):

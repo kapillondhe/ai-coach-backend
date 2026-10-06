@@ -64,9 +64,7 @@ def upgrade() -> None:
         sa.Column("synced_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
         sa.UniqueConstraint("user_id", "provider", "metric_type", "date", name="synced_daily_metrics_uq"),
     )
-    op.create_index(
-        "synced_daily_metrics_user_id_idx", "synced_daily_metrics", ["user_id", "provider", "metric_type"]
-    )
+    op.create_index("synced_daily_metrics_user_id_idx", "synced_daily_metrics", ["user_id", "provider", "metric_type"])
 
     op.create_table(
         "synced_snapshots",

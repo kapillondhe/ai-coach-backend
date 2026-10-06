@@ -1,9 +1,9 @@
-
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import CursorResult, delete, insert, select, update
 
 from app.core.db import get_session
 from app.core.models import Conversation, ConversationMessage
@@ -103,10 +103,14 @@ async def append_messages(conversation_id: str, user_id: str, messages: list[Mes
 
     now = datetime.now(UTC)
     async with get_session() as session:
-        result = await session.execute(
-            update(Conversation)
-            .where(Conversation.id == conversation_id, Conversation.user_id == user_id)
-            .values(updated_at=now)
+        # DML returns a CursorResult at runtime; Session.execute is typed as plain Result.
+        result = cast(
+            CursorResult,
+            await session.execute(
+                update(Conversation)
+                .where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+                .values(updated_at=now)
+            ),
         )
         if result.rowcount == 0:
             await session.rollback()
@@ -142,17 +146,16 @@ async def set_title(conversation_id: str, user_id: str, title: str) -> None:
 
 
 async def delete_conversation(conversation_id: str, user_id: str) -> bool:
+    """Delete a user's conversation; its messages go with it via the FK's ON DELETE CASCADE."""
     async with get_session() as session:
-        result = await session.execute(
-            delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
-        )
-        deleted = result.rowcount > 0
-        if deleted:
+        result = cast(
+            CursorResult,
             await session.execute(
-                delete(ConversationMessage).where(ConversationMessage.conversation_id == conversation_id)
-            )
+                delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+            ),
+        )
         await session.commit()
-    return deleted
+    return result.rowcount > 0
 
 
 async def list_conversations(user_id: str) -> list[ConversationSummary]:

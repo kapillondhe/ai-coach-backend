@@ -1,11 +1,11 @@
-
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
 from app.core.db import get_session
-from app.core.models import SyncedActivity, UserIntegration
+from app.core.models import Discipline, SyncedActivity
+from app.services import coros_oauth
 
 _ANONYMOUS_OPENER = "What are you training for?"
 _ANONYMOUS_CHIPS = [
@@ -27,25 +27,13 @@ _CONNECTED_CHIPS = [
     "What should I eat before a long ride?",
 ]
 
-_DISCIPLINE_WORDS = {"run": "run", "bike": "ride", "swim": "swim"}
+_DISCIPLINE_WORDS: dict[Discipline, str] = {Discipline.RUN: "run", Discipline.BIKE: "ride", Discipline.SWIM: "swim"}
 
 
 @dataclass
 class ChatOpener:
     text: str
     chips: list[str] = field(default_factory=list)
-
-
-async def _is_coros_connected(user_id: str) -> bool:
-    async with get_session() as db:
-        row = (
-            await db.execute(
-                select(UserIntegration.provider).where(
-                    UserIntegration.user_id == user_id, UserIntegration.provider == "coros"
-                )
-            )
-        ).first()
-    return row is not None
 
 
 async def _latest_activity(user_id: str) -> SyncedActivity | None:
@@ -59,7 +47,7 @@ async def _latest_activity(user_id: str) -> SyncedActivity | None:
     return result.scalars().first()
 
 
-def _describe_when(started_at) -> str:
+def _describe_when(started_at: datetime | None) -> str:
     """A recency-aware description of when an activity happened.
 
     Plain `strftime("%A")` (e.g. "Friday") reads as "this past Friday" regardless of
@@ -105,7 +93,7 @@ async def get_chat_opener(user_id: str | None) -> ChatOpener:
     if user_id is None:
         return ChatOpener(text=_ANONYMOUS_OPENER, chips=list(_ANONYMOUS_CHIPS))
 
-    if not await _is_coros_connected(user_id):
+    if not await coros_oauth.is_connected(user_id):
         return ChatOpener(text=_SIGNED_IN_OPENER, chips=list(_SIGNED_IN_CHIPS))
 
     activity = await _latest_activity(user_id)

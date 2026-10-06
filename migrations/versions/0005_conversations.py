@@ -43,9 +43,7 @@ def upgrade() -> None:
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
     )
-    op.create_index(
-        "conversation_messages_conversation_id_idx", "conversation_messages", ["conversation_id"]
-    )
+    op.create_index("conversation_messages_conversation_id_idx", "conversation_messages", ["conversation_id"])
 
 
 def downgrade() -> None:

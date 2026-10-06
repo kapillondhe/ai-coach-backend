@@ -31,6 +31,9 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The frontend is on another origin; without this the browser hides Retry-After
+    # on 429s from the chat rate limiter, so the UI can't show the real wait time.
+    expose_headers=["Retry-After"],
 )
 
 app.include_router(api_router, prefix="/api")

@@ -50,9 +50,7 @@ def test_run_sync_succeeds_with_correct_secret(monkeypatch):
 
     monkeypatch.setenv("INTERNAL_SYNC_SECRET", "correct-secret")
     get_settings.cache_clear()
-    monkeypatch.setattr(
-        sync_routes.coros_sync, "run_periodic_sync", AsyncMock(return_value={"synced": 3, "failed": 1})
-    )
+    monkeypatch.setattr(sync_routes.coros_sync, "run_periodic_sync", AsyncMock(return_value={"synced": 3, "failed": 1}))
 
     client = TestClient(app)
     response = client.post("/api/internal/sync/run", headers={"X-Internal-Sync-Secret": "correct-secret"})

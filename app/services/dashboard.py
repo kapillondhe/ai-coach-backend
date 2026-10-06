@@ -1,8 +1,8 @@
-
+import asyncio
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 
 from app.core.db import get_session
 from app.core.models import IntegrationSyncState, SyncedDailyMetric, SyncedSnapshot, UserIntegration
@@ -33,7 +33,13 @@ class DashboardSummary:
     trends: list[TrendCard] = field(default_factory=list)
 
 
-async def _is_connected(user_id: str) -> bool:
+async def _has_any_integration(user_id: str) -> bool:
+    """Whether the user has connected ANY provider.
+
+    Deliberately provider-generic: the dashboard reads the provider-keyed synced
+    tables, so a future provider (e.g. Strava) shows up here without code changes.
+    Use `coros_oauth.is_connected` when you need COROS specifically.
+    """
     async with get_session() as db:
         row = (
             await db.execute(select(UserIntegration.provider).where(UserIntegration.user_id == user_id).limit(1))
@@ -41,7 +47,7 @@ async def _is_connected(user_id: str) -> bool:
     return row is not None
 
 
-async def _get_any_sync_state(user_id: str):
+async def _get_any_sync_state(user_id: str) -> Row | None:
     """Most-recently-synced connected provider's sync state, if any."""
     async with get_session() as db:
         row = (
@@ -126,18 +132,22 @@ def _fitness_takeaway(snapshot: dict | None) -> str:
 
 
 async def get_dashboard_summary(user_id: str) -> DashboardSummary:
-    if not await _is_connected(user_id):
+    # Independent reads run concurrently; each helper opens its own session, so no
+    # session is shared across the gathered coroutines.
+    connected, sync_state = await asyncio.gather(_has_any_integration(user_id), _get_any_sync_state(user_id))
+    if not connected:
         return DashboardSummary(connected=False)
-
-    sync_state = await _get_any_sync_state(user_id)
     if sync_state is None or sync_state.last_backfill_completed_at is None:
         return DashboardSummary(connected=True, syncing=True)
 
-    since = date.today() - timedelta(weeks=TRAILING_WEEKS)
+    # UTC, like every other "today" in the backend (the chat prompt's date included).
+    since = datetime.now(UTC).date() - timedelta(weeks=TRAILING_WEEKS)
 
-    resting_hr_series = await _daily_metric_series(user_id, "resting_hr", since)
-    training_load_series = await _daily_metric_series(user_id, "training_load", since)
-    fitness_snapshot = await _latest_snapshot(user_id, "fitness_assessment")
+    resting_hr_series, training_load_series, fitness_snapshot = await asyncio.gather(
+        _daily_metric_series(user_id, "resting_hr", since),
+        _daily_metric_series(user_id, "training_load", since),
+        _latest_snapshot(user_id, "fitness_assessment"),
+    )
 
     trends = [
         TrendCard(

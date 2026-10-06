@@ -1,18 +1,20 @@
 import asyncio
 import json
 import logging
-from typing import NamedTuple
+from collections.abc import AsyncIterator
+from typing import Literal, NamedTuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from openinference.semconv.trace import SpanAttributes
 from opentelemetry import trace
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from app.agents.coach_agent import CoachReply, get_coach_agent
 from app.core.auth import get_current_user_id
+from app.core.rate_limit import enforce_chat_rate_limit
 from app.services import chat_opener as chat_opener_service
 from app.services import conversation as conversation_service
 from app.services import safety as safety_service
@@ -26,27 +28,33 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 
 _AGENT_UNAVAILABLE_DETAIL = "Coach agent is temporarily unavailable. Please try again."
 
+# Request size caps (over-limit requests get a 422). Anonymous users send their own
+# history, assistant turns included; that is accepted by design, only bounded.
+_MAX_MESSAGE_CHARS = 4000
+_MAX_HISTORY_TURNS = 50
+_MAX_HISTORY_TURN_CHARS = 8000
+
 
 class ChatOpenerResponse(BaseModel):
     text: str
     chips: list[str] = []
 
 
-@router.get("/opener", response_model=ChatOpenerResponse)
+@router.get("/opener")
 async def get_chat_opener(user_id: str | None = Depends(get_current_user_id)) -> ChatOpenerResponse:
     opener = await chat_opener_service.get_chat_opener(user_id)
     return ChatOpenerResponse(text=opener.text, chips=opener.chips)
 
 
 class ChatHistoryTurn(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
+    role: Literal["user", "assistant"]
+    content: str = Field(max_length=_MAX_HISTORY_TURN_CHARS)
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=_MAX_MESSAGE_CHARS)
     session_id: str | None = None
-    history: list[ChatHistoryTurn] = []
+    history: list[ChatHistoryTurn] = Field(default=[], max_length=_MAX_HISTORY_TURNS)
     conversation_id: str | None = None
 
 
@@ -79,7 +87,8 @@ async def _resolve_context(request: ChatRequest, user_id: str | None) -> _TurnCo
 
     if request.conversation_id:
         # The previous turn's save may still be in flight (it runs after `done` is sent);
-        # wait for it so this turn's history includes it.
+        # wait for it so this turn's history includes it. Only works within one process:
+        # see `_pending_writes`.
         pending = _pending_writes.get(request.conversation_id)
         if pending is not None:
             await asyncio.wait([pending])
@@ -100,7 +109,9 @@ async def _start_context_load(
 
     Must be declared before the `agent` dependency in a route's signature: FastAPI
     resolves dependencies in order, so the DB load is already running while the
-    agent's toolsets/memories are built. The route awaits the task.
+    agent's toolsets/memories are built. The route awaits the task. Route-level
+    `dependencies=[...]` (the rate limit) run before it, so a rejected request never
+    starts the load.
     """
     task = asyncio.create_task(_resolve_context(request, user_id))
     # Mark any exception retrieved if the route never awaits it (e.g. agent setup raised).
@@ -120,6 +131,9 @@ async def _persist_turn(user_id: str | None, conversation_id: str | None, user_m
 
 # In-flight streamed-turn saves by conversation_id: holds a strong reference so the
 # task isn't garbage-collected, and lets the next turn wait for it (`_resolve_context`).
+# Assumes a single worker process: this dict is per-process, so with multiple
+# workers/replicas the next turn can land elsewhere and load history before this save
+# commits. If the app ever scales out, move the save back before the `done` event.
 _pending_writes: dict[str, asyncio.Task[None]] = {}
 
 
@@ -174,7 +188,7 @@ def _tag_session(request: ChatRequest) -> None:
         trace.get_current_span().set_attribute(SpanAttributes.SESSION_ID, request.session_id)
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", dependencies=[Depends(enforce_chat_rate_limit)])
 async def chat(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
@@ -201,7 +215,7 @@ async def chat(
     return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=suggestions)
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", dependencies=[Depends(enforce_chat_rate_limit)])
 async def chat_stream(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
@@ -212,7 +226,7 @@ async def chat_stream(
     _tag_session(request)
     message_history, conversation_id, is_new_conversation = await context_load
 
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[str]:
         write: asyncio.Task[None] | None = None
         try:
             if conversation_id:

@@ -27,9 +27,7 @@ def test_list_conversations_returns_summaries(monkeypatch):
     response = client.get("/api/conversations")
 
     assert response.status_code == 200
-    body = response.json()
-    assert body[0]["id"] == "conv-1"
-    assert body[0]["title"] == "Marathon plan"
+    assert response.json() == [{"id": "conv-1", "title": "Marathon plan", "updated_at": "2026-01-01T00:00:00Z"}]
 
 
 def test_get_conversation_returns_messages(monkeypatch):

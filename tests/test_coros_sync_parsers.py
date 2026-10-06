@@ -165,6 +165,14 @@ def test_discipline_for_sport_code_covers_run_bike_swim_other():
     assert parsers.discipline_for_sport_code(9999) == "other"
 
 
+def test_discipline_for_sport_code_returns_enum_with_unchanged_db_strings():
+    from app.core.models import Discipline
+
+    assert parsers.discipline_for_sport_code(100) is Discipline.RUN
+    # Stored in a TEXT column: the values must stay byte-identical to the old literals.
+    assert [d.value for d in Discipline] == ["run", "bike", "swim", "other"]
+
+
 def test_parsers_degrade_gracefully_on_unexpected_text():
     """A malformed/empty response shouldn't raise — it should parse to nothing,
     so one drifted tool response doesn't take down the whole sync."""

@@ -86,12 +86,25 @@ def test_require_user_id_passes_through_when_signed_in():
     assert require_user_id(user_id="user-123") == "user-123"
 
 
-def test_chat_route_works_anonymously_without_authorization_header():
+def test_chat_route_works_anonymously_without_authorization_header(monkeypatch):
     # /coach/chat must never 401 purely for lacking a token — anonymous is
     # a first-class, permanent mode (docs/user-identity-design.md).
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from app.agents.coach_agent import CoachReply, get_coach_agent
+    from app.api.routes import coach as coach_routes
     from app.main import app
 
-    client = TestClient(app)
-    response = client.post("/api/coach/chat", json={"message": "hello"})
+    class _FakeAgent:
+        async def run(self, message, message_history=None):
+            return SimpleNamespace(output=CoachReply(reply="hi"))
 
-    assert response.status_code != 401
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=False))
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgent()
+    try:
+        response = TestClient(app).post("/api/coach/chat", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200

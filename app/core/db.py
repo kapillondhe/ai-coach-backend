@@ -14,29 +14,33 @@ def asyncpg_url(database_url: str) -> str:
     return f"postgresql+asyncpg://{rest}"
 
 
-async def _init_sessionmaker() -> async_sessionmaker[AsyncSession]:
-    global _engine
-    settings = get_settings()
+def _get_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    """Build the engine on first use.
 
-    _engine = create_async_engine(
-        asyncpg_url(settings.database_url),
-        connect_args={"statement_cache_size": 0},
-    )
-    return async_sessionmaker(_engine, expire_on_commit=False)
+    Synchronous on purpose: `create_async_engine` doesn't connect, so there is no
+    await between the None-check and the assignment, and concurrent first requests
+    can't each build (and leak) their own engine.
+    """
+    global _engine, _sessionmaker
+    if _sessionmaker is None:
+        _engine = create_async_engine(
+            asyncpg_url(get_settings().database_url),
+            connect_args={"statement_cache_size": 0},
+        )
+        _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
+    return _sessionmaker
 
 
 @asynccontextmanager
 async def get_session() -> AsyncIterator[AsyncSession]:
-    global _sessionmaker
-    if _sessionmaker is None:
-        _sessionmaker = await _init_sessionmaker()
-    async with _sessionmaker() as session:
+    async with _get_sessionmaker()() as session:
         yield session
 
 
 async def close_engine() -> None:
     global _engine, _sessionmaker
-    if _engine is not None:
-        await _engine.dispose()
+    engine = _engine
     _engine = None
     _sessionmaker = None
+    if engine is not None:
+        await engine.dispose()
