@@ -93,23 +93,23 @@ class _FakeStreamContext:
 
 
 class _FakeAgent:
-    async def run(self, message: str, message_history=None) -> _FakeResult:
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
         return _FakeResult(output=coach_agent.CoachReply(reply=f"echo: {message}", suggestions=[]))
 
-    def run_stream(self, message: str, message_history=None) -> _FakeStreamContext:
+    def run_stream(self, message: str, message_history=None, instructions=None) -> _FakeStreamContext:
         return _FakeStreamContext([f"echo: {message}"])
 
 
 class _FakeAgentWithStreamedSuggestions:
-    def run_stream(self, message: str, message_history=None) -> _FakeStreamContext:
+    def run_stream(self, message: str, message_history=None, instructions=None) -> _FakeStreamContext:
         return _FakeStreamContext([f"echo: {message}"], suggestions=["How much protein do I need?"])
 
 
 class _FakeFailingAgent:
-    async def run(self, message: str, message_history=None) -> _FakeResult:
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
         raise RuntimeError("boom")
 
-    def run_stream(self, message: str, message_history=None):
+    def run_stream(self, message: str, message_history=None, instructions=None):
         raise RuntimeError("boom")
 
 
@@ -126,7 +126,7 @@ def test_chat_returns_agent_reply():
 
 
 class _FakeSuggestingAgent:
-    async def run(self, message: str, message_history=None) -> _FakeResult:
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
         return _FakeResult(
             output=coach_agent.CoachReply(
                 reply=f"echo: {message}", suggestions=["How much protein do I need?", "Log today's run"]
@@ -194,7 +194,7 @@ class _RecordingAgent:
     def __init__(self) -> None:
         self.received_history: list = []
 
-    async def run(self, message: str, message_history=None) -> _FakeResult:
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
         self.received_history = list(message_history or [])
         return _FakeResult(output=coach_agent.CoachReply(reply=f"echo: {message}", suggestions=[]))
 
@@ -593,3 +593,91 @@ def test_chat_accepts_requests_at_the_size_limits():
 
     assert response.status_code == 200
     assert len(recording_agent.received_history) == coach_routes._MAX_HISTORY_TURNS
+
+
+class _InstructionRecordingAgent:
+    """Captures the per-run `instructions` it was called with."""
+
+    def __init__(self) -> None:
+        self.instructions: list[str | None] = []
+
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
+        self.instructions.append(instructions)
+        return _FakeResult(output=coach_agent.CoachReply(reply="ok", suggestions=[]))
+
+    def run_stream(self, message: str, message_history=None, instructions=None) -> _FakeStreamContext:
+        self.instructions.append(instructions)
+        return _FakeStreamContext(["ok"])
+
+
+@pytest.mark.parametrize("path", ["/api/coach/chat", "/api/coach/chat/stream"])
+def test_chat_passes_selected_playbooks_as_run_instructions(monkeypatch, path):
+    monkeypatch.setattr(
+        coach_routes.playbook_service, "select_playbooks", AsyncMock(return_value=["fueling-and-hydration"])
+    )
+    agent = _InstructionRecordingAgent()
+    app.dependency_overrides[get_coach_agent] = lambda: agent
+    try:
+        response = TestClient(app).post(path, json={"message": "how many gels for a 70.3?"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    [instructions] = agent.instructions
+    assert instructions is not None
+    assert "## Fueling, hydration and everyday nutrition" in instructions
+
+
+def test_chat_runs_without_instructions_when_no_playbook_matches():
+    agent = _InstructionRecordingAgent()
+    app.dependency_overrides[get_coach_agent] = lambda: agent
+    try:
+        response = TestClient(app).post("/api/coach/chat", json={"message": "thanks!"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert agent.instructions == [None]
+
+
+def test_playbook_router_runs_concurrently_with_scope_check(monkeypatch):
+    """Both are Jev round trips; routing must not add its own latency to the turn."""
+    import asyncio
+
+    both_started = asyncio.Event()
+    started: list[str] = []
+
+    def _gated(name: str, result):
+        async def _call(*args, **kwargs):
+            started.append(name)
+            if len(started) == 2:
+                both_started.set()
+            # Deadlocks (and times out) if the two calls were awaited one after the other.
+            await asyncio.wait_for(both_started.wait(), timeout=2)
+            return result
+
+        return _call
+
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", _gated("scope", False))
+    monkeypatch.setattr(coach_routes.playbook_service, "select_playbooks", _gated("router", []))
+    app.dependency_overrides[get_coach_agent] = lambda: _InstructionRecordingAgent()
+    try:
+        response = TestClient(app).post("/api/coach/chat", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert sorted(started) == ["router", "scope"]
+
+
+def test_off_topic_short_circuit_ignores_selected_playbooks(monkeypatch):
+    monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=True))
+    monkeypatch.setattr(coach_routes.playbook_service, "select_playbooks", AsyncMock(return_value=["training-week"]))
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        response = TestClient(app).post("/api/coach/chat", json={"message": "best movie ever?"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == coach_routes.scope_service.OFF_TOPIC_RESPONSE

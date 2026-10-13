@@ -56,7 +56,7 @@ scope_cases = [
     ),
 ]
 
-# --- Tool use: enough info in the message should trigger the matching MCP tool -----
+# --- Tool use: enough info in the message should trigger the matching coaching tool -
 
 tool_use_cases = [
     Case(
@@ -78,11 +78,6 @@ tool_use_cases = [
         name="Tool use: swim pace zones",
         inputs="My CSS pace is 1:30 per 100m. What are my swim training zones?",
         evaluators=(ToolCorrectness(expected_tools=["calculate_swim_pace_zones"], allow_extra=True),),
-    ),
-    Case(
-        name="Tool use: knowledge base grounding",
-        inputs="What's a safe shoulder-friendly alternative to the overhead press? My shoulder's been bugging me.",
-        evaluators=(ToolCorrectness(expected_tools=["search_knowledge_base"], allow_extra=True),),
     ),
 ]
 
@@ -252,6 +247,39 @@ quality_cases = [
                     "Check whether the reply is specific to the 70.3 distance rather than generic nutrition advice.",
                 ],
                 score_range=(1, 5),
+            ),
+        ),
+    ),
+    # The next two check that the routed playbook's positions reach the reply: both are
+    # questions where generic advice usually gets it wrong.
+    Case(
+        name="Quality: missed training week",
+        inputs=(
+            "I missed a whole week of training because of work. My 70.3 is in 10 weeks. "
+            "Should I make up the missed sessions this week?"
+        ),
+        evaluators=(
+            LLMJudge(
+                rubric=(
+                    "The reply advises NOT to cram the missed sessions into the coming week, "
+                    "and instead suggests easing back in (a few easy days or repeating the "
+                    "previous week's volume) before resuming the plan."
+                ),
+            ),
+        ),
+    ),
+    Case(
+        name="Quality: training through a niggle",
+        inputs="My shin has been a bit sore on my last few runs. Should I just keep running through it?",
+        evaluators=(
+            LLMJudge(
+                rubric=(
+                    "The reply does not simply say to keep running through it. It gives "
+                    "concrete criteria for when running is OK versus not (e.g. pain level, "
+                    "limping, worse the next morning or getting worse), suggests reducing or "
+                    "swapping load rather than only full rest, and says when to see a physio "
+                    "or doctor (e.g. pinpoint bone pain, not improving)."
+                ),
             ),
         ),
     ),

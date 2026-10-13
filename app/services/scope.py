@@ -60,7 +60,7 @@ _ON_TOPIC_CRITERIA = BoolCriteria(
 )
 
 
-def _flatten_history_for_prompt(message: str, message_history: list[ModelMessage] | None) -> str:
+def flatten_history_for_prompt(message: str, message_history: list[ModelMessage] | None) -> str:
     """Render prior turns as plain text for the classifier prompt.
 
     Same reasoning as the pre-Jev approach: flattening history into inert text
@@ -91,7 +91,7 @@ async def is_off_topic(message: str, message_history: list[ModelMessage] | None 
 
     `message_history` (same shape the main coach agent is called with) gives the
     classifier the prior turns as context, flattened into the prompt as plain text
-    (see `_flatten_history_for_prompt`), so a short follow-up that only makes sense
+    (see `flatten_history_for_prompt`), so a short follow-up that only makes sense
     relative to an on-topic conversation (e.g. "what's my name?" right after
     introducing it) isn't misclassified as off-topic in isolation.
 
@@ -105,7 +105,7 @@ async def is_off_topic(message: str, message_history: list[ModelMessage] | None 
             output_type=Annotated[bool, _ON_TOPIC_CRITERIA],
             instructions=_SCOPE_INSTRUCTIONS,
         )
-        prompt = _flatten_history_for_prompt(message, message_history)
+        prompt = flatten_history_for_prompt(message, message_history)
         result = await agent.run(prompt)
         on_topic = result.output
         return not on_topic

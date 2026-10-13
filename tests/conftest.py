@@ -27,3 +27,22 @@ def _reset_chat_rate_limiter():
     rate_limit.chat_limiter.reset()
     yield
     rate_limit.chat_limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _stub_playbook_router(request):
+    """Chat routes call the playbook router (a real Jev request) every turn; default it
+    to "no playbooks" so route tests stay offline. test_playbooks.py tests the real one.
+
+    Uses mock.patch, not `monkeypatch`: requesting monkeypatch from an autouse conftest
+    fixture would reorder its teardown relative to other modules' own fixtures.
+    """
+    if request.module.__name__.endswith("test_playbooks"):
+        yield
+        return
+    from unittest.mock import AsyncMock, patch
+
+    from app.services import playbooks
+
+    with patch.object(playbooks, "select_playbooks", AsyncMock(return_value=[])):
+        yield

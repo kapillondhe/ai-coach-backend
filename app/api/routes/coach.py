@@ -17,6 +17,7 @@ from app.core.auth import get_current_user_id
 from app.core.rate_limit import enforce_chat_rate_limit
 from app.services import chat_opener as chat_opener_service
 from app.services import conversation as conversation_service
+from app.services import playbooks as playbook_service
 from app.services import safety as safety_service
 from app.services import scope as scope_service
 from app.services import titling as titling_service
@@ -156,15 +157,28 @@ def _persist_turn_in_background(
     return task
 
 
-async def _short_circuit_reply(message: str, message_history: list[ModelMessage]) -> str | None:
-    """A canned reply for messages the agent shouldn't handle (emergency, off-topic), else None."""
+class _TurnPlan(NamedTuple):
+    """What to do with a turn: a canned `reply` (emergency/off-topic), or None to run
+    the agent with `instructions` (the playbooks picked for this message, if any)."""
+
+    reply: str | None
+    instructions: str | None
+
+
+async def _plan_turn(message: str, message_history: list[ModelMessage]) -> _TurnPlan:
+    """Run the pre-agent checks. The off-topic classifier and the playbook router are
+    both Jev calls, so they run concurrently: routing adds no latency to the turn."""
     if safety_service.contains_emergency_red_flag(message):
         logger.warning("Emergency red flag detected in chat message; short-circuiting the agent")
-        return safety_service.EMERGENCY_RESPONSE
-    if await scope_service.is_off_topic(message, message_history=message_history):
+        return _TurnPlan(safety_service.EMERGENCY_RESPONSE, None)
+    off_topic, playbook_ids = await asyncio.gather(
+        scope_service.is_off_topic(message, message_history=message_history),
+        playbook_service.select_playbooks(message, message_history),
+    )
+    if off_topic:
         logger.info("Off-topic message detected; short-circuiting the agent")
-        return scope_service.OFF_TOPIC_RESPONSE
-    return None
+        return _TurnPlan(scope_service.OFF_TOPIC_RESPONSE, None)
+    return _TurnPlan(None, playbook_service.render_instructions(playbook_ids))
 
 
 def _schedule_titling(
@@ -199,11 +213,11 @@ async def chat(
     _tag_session(request)
     message_history, conversation_id, is_new_conversation = await context_load
 
-    reply = await _short_circuit_reply(request.message, message_history)
+    reply, instructions = await _plan_turn(request.message, message_history)
     suggestions: list[str] = []
     if reply is None:
         try:
-            result = await agent.run(request.message, message_history=message_history)
+            result = await agent.run(request.message, message_history=message_history, instructions=instructions)
         except Exception as exc:
             logger.exception("Coach agent failed to produce a reply")
             raise HTTPException(status_code=502, detail=_AGENT_UNAVAILABLE_DETAIL) from exc
@@ -232,13 +246,15 @@ async def chat_stream(
             if conversation_id:
                 yield _sse({"conversation_id": conversation_id}, "conversation")
 
-            reply = await _short_circuit_reply(request.message, message_history)
+            reply, instructions = await _plan_turn(request.message, message_history)
             suggestions: list[str] = []
             if reply is not None:
                 yield _sse({"delta": reply})
             else:
                 sent_so_far = ""
-                async with agent.run_stream(request.message, message_history=message_history) as result:
+                async with agent.run_stream(
+                    request.message, message_history=message_history, instructions=instructions
+                ) as result:
                     async for partial in result.stream_output(debounce_by=0.1):
                         reply_so_far = partial.reply or ""
                         if len(reply_so_far) > len(sent_so_far):

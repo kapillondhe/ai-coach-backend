@@ -1,16 +1,15 @@
 """Deterministic pre-check for unambiguous medical emergencies.
 
 This is a backstop, not a replacement for the coach agent's system-prompt
-safety instructions: a fixed set of high-signal regex patterns (drawn from the
-in-process knowledge base's `knowledge_base/physiotherapy/medical-red-flags-requiring-referral.md`
-"Seek emergency care immediately" section, which the agent searches via the
-`search_knowledge_base` tool) that short-circuits straight to a canned response,
-bypassing the LLM entirely.
+safety instructions: a fixed set of high-signal regex patterns for the
+emergency-tier red flags (the "Emergency" list in
+`app/playbooks/pain-and-injury.md`) that short-circuits straight to a canned
+response, bypassing the LLM entirely.
 
 Deliberately narrow in scope: only the emergency-tier red flags, not the
-broader "warrants prompt (non-emergency) medical evaluation" list in the same
-knowledge-base doc. Missing one of those is lower-stakes and is left to the
-system prompt + knowledge base; this module exists specifically because
+broader "see a doctor or physio soon" list in the same playbook. Missing one
+of those is lower-stakes and is left to the system prompt + playbook; this
+module exists specifically because
 prompt instructions alone aren't reliable enough for the one category (true
 emergencies) where a miss is dangerous, not just off-brand, and because a
 regex check can't be talked out of firing by prompt injection the way a model

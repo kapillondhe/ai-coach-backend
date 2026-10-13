@@ -21,11 +21,6 @@ openinference-instrumentation-pydantic-ai==0.1.24
 openinference-semantic-conventions==0.1.34
 opentelemetry-instrumentation-fastapi==0.65b0
 
-# Knowledge-base vector search (app/services/vector_store.py). The [fastembed] extra
-# embeds locally for dev/tests; production (pyproject.toml) skips it and embeds
-# server-side via Qdrant Cloud Inference.
-qdrant-client[fastembed]==1.19.0
-
 # Dev / test / evals only (pyproject.toml's `dev` extra).
 pytest==9.0.1
 pytest-asyncio==1.4.0

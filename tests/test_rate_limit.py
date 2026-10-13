@@ -19,7 +19,7 @@ class _FakeResult:
 
 
 class _FakeAgent:
-    async def run(self, message: str, message_history=None) -> _FakeResult:
+    async def run(self, message: str, message_history=None, instructions=None) -> _FakeResult:
         return _FakeResult(output=coach_agent.CoachReply(reply="ok", suggestions=[]))
 
 

@@ -10,14 +10,12 @@ the model sees, so keep them precise.
 
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.tools.knowledge_base import search_knowledge_base
 from app.tools.nutrition import calculate_protein_intake
 from app.tools.zones import calculate_heart_rate_zones, calculate_power_zones, calculate_swim_pace_zones
 
 coaching_toolset = FunctionToolset(
     [
         calculate_protein_intake,
-        search_knowledge_base,
         calculate_heart_rate_zones,
         calculate_power_zones,
         calculate_swim_pace_zones,

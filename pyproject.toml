@@ -21,12 +21,9 @@ dependencies = [
     "openinference-instrumentation-pydantic-ai==0.1.24",
     "openinference-semantic-conventions==0.1.34",
     "opentelemetry-instrumentation-fastapi==0.65b0",
-    # No [fastembed] extra: production embeds server-side via Qdrant Cloud Inference.
-    "qdrant-client==1.19.0",
 ]
 
 [project.optional-dependencies]
-# fastembed embeds locally for dev (local Qdrant) and tests (QdrantClient(":memory:")).
 # pydantic-evals is only used by evals/ (not imported by app/); keep its pin equal to pydantic-ai-slim's.
 dev = [
     "pytest==9.0.1",
@@ -34,11 +31,14 @@ dev = [
     "ruff==0.14.5",
     "pyright==1.1.414",
     "pydantic-evals==2.54.0",
-    "qdrant-client[fastembed]==1.19.0",
 ]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+# Coaching playbooks are read at runtime (app/services/playbooks.py).
+"app.playbooks" = ["*.md"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -69,7 +69,7 @@ ignore = [
 known-first-party = ["app"]
 
 [tool.pyright]
-include = ["app", "scripts", "migrations"]
+include = ["app", "migrations"]
 typeCheckingMode = "basic"
 pythonVersion = "3.13"
 venvPath = "."

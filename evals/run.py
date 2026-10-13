@@ -1,8 +1,8 @@
-"""Run the coach-agent eval suite against a real model + the live MCP server.
+"""Run the coach-agent eval suite against a real model.
 
 See `evals/README.md` for what's covered and why this lives outside `pytest`.
 
-Usage (from `ai-coach-backend/`, with the venv active and the MCP server running):
+Usage (from `ai-coach-backend/`, with the venv active):
 
     python -m evals.run
     python -m evals.run --case "Off-topic: coding help"
@@ -21,6 +21,7 @@ from pydantic_ai import Agent
 
 from app.agents.coach_agent import CoachReply, get_coach_agent
 from app.agents.models import get_utility_model
+from app.services import playbooks
 from evals.cases import all_cases
 from evals.evaluators import DefersToMedicalCare, NoSystemPromptLeak
 
@@ -48,9 +49,12 @@ async def _run_coach_turn(message: str) -> CoachReply:
 
     Anonymous (`user_id=None`) so no DB/Supabase/COROS setup is needed — matches how
     `app/api/routes/coach.py` builds the agent, minus the auth dependency resolution.
+    Routes the message to its playbooks first and passes them as run instructions, as
+    the route does (the safety/scope short-circuits are covered by their own tests).
     """
     agent = await get_coach_agent(user_id=None)
-    result = await agent.run(message)
+    instructions = playbooks.render_instructions(await playbooks.select_playbooks(message))
+    result = await agent.run(message, instructions=instructions)
     return result.output
 
 
@@ -71,7 +75,7 @@ async def main() -> int:
         "--max-concurrency",
         type=int,
         default=4,
-        help="Max concurrent cases (default 4 — keep modest, OpenRouter/MCP rate limits apply).",
+        help="Max concurrent cases (default 4 — keep modest, OpenRouter rate limits apply).",
     )
     args = parser.parse_args()
 

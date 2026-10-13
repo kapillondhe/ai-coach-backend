@@ -15,7 +15,7 @@ commit.
   redirected, not answered.
 - **Tool use**: a request that gives enough info for a specific coaching tool
   (`calculate_protein_intake`, `calculate_heart_rate_zones`, `calculate_power_zones`,
-  `calculate_swim_pace_zones`, `search_knowledge_base`) actually triggers that tool.
+  `calculate_swim_pace_zones`) actually triggers that tool.
 - **Safety**: symptom phrasing that's *not* caught by `app/services/safety.py`'s
   narrow emergency-regex pre-check (that pre-check is covered by
   `tests/test_safety.py` and short-circuits before the agent ever runs) but that the
@@ -25,9 +25,14 @@ commit.
 - **Suggestion-chip safety**: slot-filling replies (asking for weight/pace/etc.) must
   not produce a suggestion chip that invents a specific personal number, per
   `ai-coach-backend-patterns` skill's documented pitfall.
-- **General quality**: a couple of open-ended coaching questions scored by an LLM
-  judge (`GEval`) for actionable, sport-appropriate advice, since most cases above use
-  cheap deterministic or tool-trajectory checks instead.
+- **General quality**: open-ended coaching questions scored by an LLM judge
+  (`GEval`/`LLMJudge`) for actionable, sport-appropriate advice, including two that
+  check a routed playbook's position reaches the reply (missed week, training through
+  a niggle). `run.py` routes each message to its playbooks first, like the chat route.
+
+`playbook_routing.py` is separate: it measures the playbook router itself (live Jev
+calls) against labeled messages, reporting misses, unwanted picks and latency. Run it
+after changing a playbook's `description`, adding a playbook, or touching the router.
 
 `evaluators.py` has two small custom `Evaluator`s that reuse the existing
 `app/services/safety.py` checks and a regex for digit-bearing suggestion chips.
@@ -40,12 +45,11 @@ Everything else is a built-in from `pydantic_evals.evaluators`
 source .venv/bin/activate
 python -m evals.run                  # pretty-prints a report table to stdout
 python -m evals.run --case "Off-topic: coding help"   # one case by name
+python -m evals.playbook_routing     # playbook router accuracy
 ```
 
-Requires `OPENROUTER_API_KEY` in `.env` (same as normal backend operation) and a
-populated local Qdrant (`docker compose up -d` + `python -m scripts.ingest_knowledge_base`)
-for the knowledge-base cases, exactly like running the
-backend for real — `evals/run.py` builds the agent via the same
+Requires `OPENROUTER_API_KEY` in `.env` (same as normal backend operation), exactly
+like running the backend for real — `evals/run.py` builds the agent via the same
 `app.agents.coach_agent.get_coach_agent` the FastAPI route uses, with no mocking.
 
 The `LLMJudge`/`GEval` cases use the tier-2 utility model

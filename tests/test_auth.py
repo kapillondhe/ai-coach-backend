@@ -97,7 +97,7 @@ def test_chat_route_works_anonymously_without_authorization_header(monkeypatch):
     from app.main import app
 
     class _FakeAgent:
-        async def run(self, message, message_history=None):
+        async def run(self, message, message_history=None, instructions=None):
             return SimpleNamespace(output=CoachReply(reply="hi"))
 
     monkeypatch.setattr(coach_routes.scope_service, "is_off_topic", AsyncMock(return_value=False))

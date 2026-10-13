@@ -12,30 +12,22 @@ cp .env.example .env
 ## Run
 
 One process: this FastAPI backend, whose Pydantic AI coach agent runs the
-fitness-coaching tools in-process (`app/tools/`). The knowledge-base search tool needs
-a Qdrant instance populated from `knowledge_base/`.
+fitness-coaching tools in-process (`app/tools/`). Coaching guidance lives in
+`app/playbooks/*.md`; the relevant ones are added to each chat turn automatically.
 
 ```bash
 source .venv/bin/activate
-docker compose up -d                     # local Qdrant (:6333)
-python -m scripts.ingest_knowledge_base  # first time, and after editing knowledge_base/*.md
 uvicorn app.main:app --reload --port 8000
 ```
 
 Set `OPENROUTER_API_KEY` in `.env` for the coach agent to actually run (see `.env.example`).
 `OPENROUTER_MODEL` (default `z-ai/glm-5.3-flash`) runs the main coach conversation;
 `OPENROUTER_UTILITY_MODEL` is a cheaper model for lightweight tasks like conversation
-titling, and `OPENROUTER_JEV_MODEL` is the yes/no decision model behind the off-topic and
-memory-save guardrails. All three are built in `app/agents/models.py`.
+titling, and `OPENROUTER_JEV_MODEL` is the decision model behind the off-topic and
+memory-save guardrails and the playbook router. All three are built in `app/agents/models.py`.
 Chat is rate-limited per user (or per client IP when anonymous) via
 `CHAT_RATE_LIMIT_PER_MINUTE` (default 20, `0` disables). The limiter is in-process, so
 limits apply per worker.
-`QDRANT_URL` (default `http://localhost:6333`, plus `QDRANT_API_KEY` for Qdrant Cloud)
-points the knowledge-base tool at Qdrant; if it's unreachable the tool returns no
-results and chat carries on without grounding. Production uses Qdrant Cloud, which
-computes embeddings server-side (Cloud Inference); locally the same model runs via
-fastembed. To (re-)load production's knowledge base:
-`QDRANT_URL=<cloud url> python -m scripts.ingest_knowledge_base` with `QDRANT_API_KEY` in `.env`.
 
 - API root: http://localhost:8000
 - Health: http://localhost:8000/api/health
@@ -80,13 +72,12 @@ app/
   core/telemetry.py  OpenTelemetry export to Arize Phoenix (no-ops without PHOENIX_API_KEY)
   agents/models.py   OpenRouter model factories (coach, utility, Jev decision model)
   agents/coach_agent.py  the coach Agent: prompt, toolsets (coaching + COROS), output safety
-  tools/             in-process coaching tools (nutrition, zones, knowledge-base search)
+  tools/             in-process coaching tools (nutrition, zones)
+  playbooks/         coaching guidance per topic (*.md), routed into chat turns
   services/          business logic: conversations, memory, profile, dashboard, COROS
                      OAuth/MCP pool/sync, guardrails (safety, scope, memory_guardrail),
-                     vector_store.py (Qdrant client for the knowledge base)
+                     playbooks.py (playbook loading + router)
 migrations/          Alembic migrations
-knowledge_base/      curated coaching content (*.md), ingested into Qdrant
-scripts/             ingest_knowledge_base.py
 evals/               LLM-output evals against the real model (not run by pytest)
 tests/
 ```
