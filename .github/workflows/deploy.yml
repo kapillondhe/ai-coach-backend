@@ -26,6 +26,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
+        with:
+          # Pinned like `checks`: an unpinned runner default (3.15) has no pydantic-core wheel.
+          python-version: "3.14"
       - run: uv run fastapi deploy
         env:
           FASTAPI_CLOUD_TOKEN: ${{ secrets.FASTAPI_CLOUD_TOKEN }}
