@@ -10,7 +10,7 @@ from app.services import coros_mcp
 class _FakeMCPToolset:
     """Stands in for pydantic_ai's MCPToolset: tracks opens/closes and list_tools calls."""
 
-    instances: list["_FakeMCPToolset"] = []
+    instances: list[_FakeMCPToolset] = []
 
     def __init__(self, token: str) -> None:
         self.token = token

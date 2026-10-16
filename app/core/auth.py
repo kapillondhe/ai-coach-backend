@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache
-def _jwks_client(supabase_url: str) -> "jwt.PyJWKClient":
+def _jwks_client(supabase_url: str) -> jwt.PyJWKClient:
     return jwt.PyJWKClient(f"{supabase_url}/auth/v1/.well-known/jwks.json")
 
 

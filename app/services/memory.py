@@ -21,7 +21,7 @@ MAX_PROMPT_MEMORIES = 50  # newest N injected into the system prompt
 # Writes in this process invalidate immediately; another worker process may serve
 # a stale list for up to the TTL.
 _LIST_CACHE_TTL = 60.0
-_list_cache: dict[str, tuple[float, list["MemoryData"]]] = {}
+_list_cache: dict[str, tuple[float, list[MemoryData]]] = {}
 
 
 @dataclass

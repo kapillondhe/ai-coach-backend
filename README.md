@@ -2,10 +2,11 @@
 
 ## Setup
 
+Python 3.14 and [uv](https://docs.astral.sh/uv/):
+
 ```bash
-python3 -m venv .venv
+uv sync --extra dev      # creates .venv from uv.lock
 source .venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -27,7 +28,8 @@ titling, and `OPENROUTER_JEV_MODEL` is the decision model behind the off-topic a
 memory-save guardrails and the playbook router. All three are built in `app/agents/models.py`.
 Chat is rate-limited per user (or per client IP when anonymous) via
 `CHAT_RATE_LIMIT_PER_MINUTE` (default 20, `0` disables). The limiter is in-process, so
-limits apply per worker.
+limits apply per worker. Anonymous callers are keyed by the X-Forwarded-For entry our proxy
+appended (`TRUSTED_PROXY_HOPS` from the right, default 1), not the client-supplied left-most one.
 
 - API root: http://localhost:8000
 - Health: http://localhost:8000/api/health
@@ -51,10 +53,18 @@ pyright                  # basic mode, configured in pyproject.toml
 alembic check            # models in app/core/models.py must match the migrated schema
 ```
 
-CI (`.github/workflows/deploy.yml`) runs ruff, pyright and pytest, and deploys only when they pass.
+CI (`.github/workflows/deploy.yml`) checks the lockfile, runs ruff, pyright and pytest, applies
+the migrations to an empty Postgres and runs `alembic check`, and deploys only when all pass.
 
-Dependencies: production installs from `pyproject.toml`; `requirements.txt` is the local
-dev install and must keep identical pins (dev/test/evals tools live in the `dev` extra).
+Dependencies: declare them in `pyproject.toml` (dev/test/evals tools in the `dev` extra), then
+`uv lock` and regenerate `requirements.txt` (pip-compatible, never edited by hand):
+
+```bash
+uv lock
+uv export --frozen --extra dev --no-hashes --no-emit-project -o requirements.txt
+```
+
+FastAPI Cloud installs from `uv.lock`; CI fails if either file is out of date.
 
 ## Layout
 

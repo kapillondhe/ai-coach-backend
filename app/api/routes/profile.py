@@ -1,13 +1,9 @@
-import logging
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.auth import require_user_id
 from app.services import profile as profile_service
 from app.services.profile import ProfileError
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 

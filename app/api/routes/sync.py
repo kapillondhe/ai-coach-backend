@@ -1,13 +1,10 @@
 import hmac
-import logging
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.core.config import get_settings
 from app.services import coros_sync
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal/sync", tags=["internal"])
 

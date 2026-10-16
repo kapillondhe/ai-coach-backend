@@ -1,4 +1,3 @@
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,8 +6,6 @@ from pydantic import BaseModel
 from app.core.auth import require_user_id
 from app.services import conversation as conversation_service
 from app.services.conversation import ConversationNotFoundError
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
