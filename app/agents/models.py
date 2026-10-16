@@ -43,13 +43,11 @@ def get_utility_model() -> OpenRouterModel:
 
 @lru_cache
 def get_jev_model() -> SystemOneModel:
-    """Decision model (TypeSafe's Jev) for typed yes/no classification guardrails
-    (`app.services.scope`, `app.services.memory_guardrail`).
+    """Decision model (TypeSafe's Jev) for typed decisions: the scope and memory-save
+    guardrails and the playbook router.
 
-    Routed through OpenRouter's `/v1/systemone`-compatible endpoint via `SystemOneModel`
-    + `SystemOneProvider` (billed to the same OPENROUTER_API_KEY as every other model
-    here) rather than `pydantic_ai.models.typesafe.TypeSafeModel`, which talks directly
-    to TypeSafe's own API and needs a separate TYPESAFE_API_KEY/account.
+    Called through OpenRouter's System One endpoint, so it bills to OPENROUTER_API_KEY;
+    `TypeSafeModel` would need a separate TypeSafe account.
     """
     settings = get_settings()
     provider = SystemOneProvider(base_url="https://openrouter.ai/api", api_key=settings.openrouter_api_key)

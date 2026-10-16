@@ -19,16 +19,10 @@ class ProfileResponse(BaseModel):
     field_sources: dict[str, str]
 
 
-_MAX_NAME_CHARS = 100
-_MAX_INJURY_NOTES_CHARS = 2000
-_MIN_WEIGHT_KG = 20
-_MAX_WEIGHT_KG = 300
-
-
 class ProfileUpdateRequest(BaseModel):
-    name: str | None = Field(default=None, max_length=_MAX_NAME_CHARS)
-    weight_kg: float | None = Field(default=None, ge=_MIN_WEIGHT_KG, le=_MAX_WEIGHT_KG)
-    injury_notes: str | None = Field(default=None, max_length=_MAX_INJURY_NOTES_CHARS)
+    name: str | None = Field(default=None, max_length=profile_service.MAX_NAME_CHARS)
+    weight_kg: float | None = Field(default=None, ge=profile_service.MIN_WEIGHT_KG, le=profile_service.MAX_WEIGHT_KG)
+    injury_notes: str | None = Field(default=None, max_length=profile_service.MAX_INJURY_NOTES_CHARS)
 
 
 def _to_response(data: profile_service.ProfileData) -> ProfileResponse:

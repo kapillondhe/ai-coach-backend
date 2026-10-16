@@ -168,7 +168,7 @@ async def get_dashboard_summary(user_id: str) -> DashboardSummary:
         TrendCard(
             id="fitness_assessment",
             label="Fitness snapshot",
-            sparkline=[],  # no vendor-side history for this metric — see docs/tasks/10
+            sparkline=[],  # COROS returns only the current snapshot for this metric, no history
             takeaway=_fitness_takeaway(fitness_snapshot),
             extra=fitness_snapshot or {},
         ),

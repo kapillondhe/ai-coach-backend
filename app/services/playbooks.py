@@ -9,9 +9,9 @@ per playbook, and `render_instructions` turns the picks into per-run `instructio
 for that turn only. The base prompt stays small, and adding a topic is just adding a
 file.
 
-Replaces the old Qdrant-backed knowledge-base search: a few curated files don't need
-embeddings or an ingestion step, and routing every turn (instead of hoping the model
-calls a search tool) means relevant guidance is never skipped.
+A few curated files need no embeddings or ingestion step, and routing every turn
+(instead of hoping the model calls a search tool) means relevant guidance is never
+skipped.
 
 Fails open: any router error injects nothing, and chat runs on the base prompt alone.
 """

@@ -1,8 +1,6 @@
 """In-process coaching tools (fitness-domain logic) exposed to the coach agent.
 
-These used to live in the separate ai-coach-mcp-server and were reached over MCP;
-they now run in the backend process, so chat no longer depends on another deployed
-service. MCP is only used for genuinely external tool providers (COROS).
+MCP is only used for genuinely external tool providers (COROS).
 
 Tool docstrings (incl. Args) are parsed into the tool description and parameter docs
 the model sees, so keep them precise.

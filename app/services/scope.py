@@ -1,19 +1,15 @@
-"""Scope guardrail: classify whether a message is on-topic for the coach, and
-short-circuit off-topic messages to a canned redirect before the main coach
-agent ever runs.
+"""Scope guardrail: short-circuit off-topic messages to a canned redirect before the
+coach agent runs.
 
-Why: `coach_agent.SYSTEM_PROMPT`'s scope rule alone isn't reliable; models still
-partly answer casual off-topic asides after a few friendly turns. Like
-`app.services.safety`'s emergency pre-check, this layer can't be talked out of
-declining.
+The system prompt's scope rule alone isn't reliable: models still partly answer casual
+off-topic asides after a few friendly turns. Like `app.services.safety`'s emergency
+pre-check, this layer can't be talked out of declining. It runs on Jev
+(`get_jev_model()`), a typed yes/no decision model, because it runs before every
+message and latency matters.
 
-How: a pydantic-ai `Agent` on Jev (`app.agents.models.get_jev_model()`), a typed
-yes/no decision model that was ~5x faster and 3-4x cheaper per call than the
-tier-2 utility model it replaced. It runs before every message, so latency matters.
-
-OPEN ISSUE: after switching to `BoolCriteria`/`Annotated[bool, ...]` output, Jev
-scored 12/14 vs the legacy classifier's 14/14 on evals/cases.py's labeled set;
-accuracy still needs re-verification before it's trusted at face value.
+OPEN ISSUE: with the current `BoolCriteria` output, Jev scored 12/14 on
+evals/cases.py's labeled set (the previous utility-model classifier: 14/14). Re-measure
+before trusting its accuracy.
 
 Fails open (treats the message as on-topic) on any classifier error.
 """

@@ -1,5 +1,5 @@
 """Parser tests use real captured COROS MCP text responses (from a live spike
-against a real connected account — see docs/tasks/10-coros-sync-layer.md) as
+against a real connected account) as
 fixtures, so a parsing regression is caught against the real vendor shape,
 not a hand-written approximation of it.
 """

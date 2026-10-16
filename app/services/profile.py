@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.db import get_session
@@ -12,6 +12,12 @@ EDITABLE_FIELDS = (
     "weight_kg",
     "injury_notes",
 )
+
+# Value bounds, shared by the PATCH /profile request model and the coach's update tool.
+MAX_NAME_CHARS = 100
+MAX_INJURY_NOTES_CHARS = 2000
+MIN_WEIGHT_KG = 20
+MAX_WEIGHT_KG = 300
 
 _RETURNED_COLUMNS = (Profile.name, Profile.weight_kg, Profile.injury_notes, Profile.field_sources)
 
@@ -56,6 +62,13 @@ async def get_or_create_profile(user_id: str) -> ProfileData:
         row = (await session.execute(_get_or_create_stmt(user_id))).one()
         await session.commit()
     return _row_to_data(user_id, row)
+
+
+async def get_profile(user_id: str) -> ProfileData | None:
+    """Read-only lookup (no row is created), for the coach's per-turn system prompt."""
+    async with get_session() as session:
+        row = (await session.execute(select(*_RETURNED_COLUMNS).where(Profile.user_id == user_id))).first()
+    return _row_to_data(user_id, row) if row is not None else None
 
 
 def _validate_updates(updates: dict[str, object]) -> None:

@@ -1,23 +1,12 @@
-"""Memory-save guardrail: classify whether a candidate fact is actually worth
-persisting to long-term user memory, as a check in front of the main coach
-model's own judgment call.
+"""Memory-save guardrail: check that a fact the coach wants to `remember` is worth
+persisting long-term.
 
-This exists for the same reason as `app.services.scope`'s off-topic guardrail:
-relying solely on the main coach model's judgment (via `coach_agent`'s
-`_MEMORY_TOOL_DESCRIPTION`, "only call this for things worth recalling later —
-not every message") is not a hard guarantee — a model can still call the
-`remember` tool for a trivial, vague, or already-generic detail. This adds a
-layer in front of the persist call that double-checks the decision instead of
-trusting the main model's instruction-following alone.
+The coach model's own judgment (the tool description says "not every message") isn't a
+hard guarantee, so this Jev check (`get_jev_model()`, same as `app.services.scope`)
+sits in front of the write.
 
-Classification runs on Jev (TypeSafe's "System One" decision model) via
-`app.agents.models.get_jev_model()` — the same model/transport as the
-scope guardrail, for the same latency/cost reasons (see
-`app.services.scope`'s module docstring).
-
-Fails open (treats the fact as worth remembering) on any classifier error, so
-a transient model/API issue never silently drops a fact the main model already
-decided was worth saving.
+Fails open (saves the fact) on any classifier error, so a transient API issue never
+drops a fact the coach already decided to keep.
 """
 
 import logging

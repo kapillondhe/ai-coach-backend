@@ -6,6 +6,15 @@ from pydantic_ai import ModelRetry
 
 from app.agents import coach_agent
 from app.services.memory import MemoryData
+from app.services.profile import ProfileData
+
+
+@pytest.fixture(autouse=True)
+def _offline_signed_in_lookups(monkeypatch):
+    """Signed-in agent setup reads the profile and the COROS token; keep both off the
+    (dummy) DB by default. Tests that need either override it."""
+    monkeypatch.setattr(coach_agent.profile_service, "get_profile", AsyncMock(return_value=None))
+    monkeypatch.setattr(coach_agent.coros_oauth, "get_access_token", AsyncMock(return_value=None))
 
 
 @pytest.mark.asyncio
@@ -365,3 +374,101 @@ def test_chat_route_resolves_user_id_through_real_dependency_chain(monkeypatch):
     # No Authorization header and no supabase_url configured in tests ->
     # anonymous (None) is the correctly-resolved user_id here.
     assert seen_user_ids == [None]
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_injects_profile_fields(monkeypatch):
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    profile = ProfileData(user_id="user-123", name="Sam", weight_kg=72.5, injury_notes="Sore left Achilles")
+    monkeypatch.setattr(coach_agent.profile_service, "get_profile", AsyncMock(return_value=profile))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert "- Name: Sam" in prompt
+    assert "- Weight: 72.5 kg" in prompt
+    assert "- Injury notes: Sore left Achilles" in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_skips_empty_profile_fields(monkeypatch):
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    profile = ProfileData(user_id="user-123", weight_kg=70.0)
+    monkeypatch.setattr(coach_agent.profile_service, "get_profile", AsyncMock(return_value=profile))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert "- Weight: 70 kg" in prompt
+    assert "- Name:" not in prompt
+    assert "- Injury notes:" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_system_prompt_keeps_memories_when_profile_lookup_fails(monkeypatch):
+    memories = [MemoryData(id="m1", content="Training for a first 70.3", created_at=None)]
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=memories))
+    monkeypatch.setattr(coach_agent.profile_service, "get_profile", AsyncMock(side_effect=RuntimeError("DB down")))
+
+    prompt = await coach_agent._build_system_prompt(user_id="user-123")
+
+    assert "Training for a first 70.3" in prompt
+    assert prompt.startswith("Today's date is")
+
+
+async def _profile_tool(monkeypatch):
+    monkeypatch.setattr(coach_agent.memory_service, "list_memories", AsyncMock(return_value=[]))
+    agent = await coach_agent.get_coach_agent(user_id="user-123")
+    return agent.toolsets[0].tools["update_profile"]
+
+
+@pytest.mark.asyncio
+async def test_anonymous_agent_has_no_profile_tool(monkeypatch):
+    agent = await coach_agent.get_coach_agent(user_id=None)
+    assert "update_profile" not in agent.toolsets[0].tools
+
+
+@pytest.mark.asyncio
+async def test_profile_tool_reaches_the_model_with_description_and_params(monkeypatch):
+    tool = await _profile_tool(monkeypatch)
+
+    assert tool.description == coach_agent._PROFILE_TOOL_DESCRIPTION
+    assert set(tool.tool_def.parameters_json_schema["properties"]) == {"name", "weight_kg", "injury_notes"}
+
+
+@pytest.mark.asyncio
+async def test_profile_tool_saves_stated_fields_with_coach_source(monkeypatch):
+    update_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.profile_service, "update_profile", update_mock)
+    tool = await _profile_tool(monkeypatch)
+
+    result = await tool.function(weight_kg=72.0, injury_notes="  Sore left Achilles ")
+
+    update_mock.assert_awaited_once_with(
+        "user-123", {"weight_kg": 72.0, "injury_notes": "Sore left Achilles"}, source="coach"
+    )
+    assert "weight_kg" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"weight_kg": 160 / 0.4536 * 3}, {"weight_kg": 5}, {"name": "   "}, {"name": "x" * 500}],
+)
+async def test_profile_tool_rejects_bad_arguments_with_model_retry(monkeypatch, kwargs):
+    update_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.profile_service, "update_profile", update_mock)
+    tool = await _profile_tool(monkeypatch)
+
+    with pytest.raises(ModelRetry):
+        await tool.function(**kwargs)
+    update_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_profile_tool_can_clear_injury_notes(monkeypatch):
+    update_mock = AsyncMock()
+    monkeypatch.setattr(coach_agent.profile_service, "update_profile", update_mock)
+    tool = await _profile_tool(monkeypatch)
+
+    await tool.function(injury_notes="")
+
+    update_mock.assert_awaited_once_with("user-123", {"injury_notes": None}, source="coach")

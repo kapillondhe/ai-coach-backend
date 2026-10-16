@@ -43,6 +43,10 @@ class _FakeProfileSession(FakeSession):
             )
             return _Result(dict(row))
 
+        if kind == "Select":
+            row = self.store.get(params["user_id_1"])
+            return SimpleNamespace(first=lambda: SimpleNamespace(**row) if row is not None else None)
+
         if kind == "Update":
             row = self.store.get(params.pop("user_id_1"))
             if row is None:
@@ -150,3 +154,21 @@ async def test_update_profile_can_clear_a_field(store):
 
     assert data.injury_notes is None
     assert data.field_sources == {"injury_notes": "user"}
+
+
+@pytest.mark.asyncio
+async def test_get_profile_is_read_only_and_none_when_absent(store, log):
+    assert await profile_service.get_profile("user-1") is None
+    assert "Insert" not in log  # never creates a row
+    assert store == {}
+
+
+@pytest.mark.asyncio
+async def test_get_profile_returns_stored_fields(store):
+    await profile_service.update_profile("user-1", {"weight_kg": 70.0}, source="coach")
+
+    data = await profile_service.get_profile("user-1")
+
+    assert data is not None
+    assert data.weight_kg == 70.0
+    assert data.field_sources == {"weight_kg": "coach"}
