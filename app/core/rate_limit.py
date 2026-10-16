@@ -71,9 +71,10 @@ def client_ip(request: Request) -> str:
     """The caller's IP as seen by our own proxy: the X-Forwarded-For entry
     `trusted_proxy_hops` places from the right, else the socket peer.
 
-    FastAPI Cloud's proxy appends the connecting IP and keeps whatever the client sent,
-    so the left-most entries are client-controlled: rotating them used to give a fresh
-    bucket per request. Don't use `request.client.host` either when the header is
+    FastAPI Cloud keeps whatever XFF the client sent and appends two entries (client IP,
+    then its edge's IP), so the left-most entries are client-controlled: rotating them
+    used to give a fresh bucket per request, and the right-most is shared by everyone
+    behind one edge. Don't use `request.client.host` either when the header is
     present: prod's uvicorn trusts all proxies and sets it to the left-most entry.
     """
     hops = get_settings().trusted_proxy_hops

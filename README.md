@@ -29,7 +29,7 @@ memory-save guardrails and the playbook router. All three are built in `app/agen
 Chat is rate-limited per user (or per client IP when anonymous) via
 `CHAT_RATE_LIMIT_PER_MINUTE` (default 20, `0` disables). The limiter is in-process, so
 limits apply per worker. Anonymous callers are keyed by the X-Forwarded-For entry our proxy
-appended (`TRUSTED_PROXY_HOPS` from the right, default 1), not the client-supplied left-most one.
+appended (`TRUSTED_PROXY_HOPS` from the right, default 2 for FastAPI Cloud), not the client-supplied left-most one.
 
 - API root: http://localhost:8000
 - Health: http://localhost:8000/api/health
