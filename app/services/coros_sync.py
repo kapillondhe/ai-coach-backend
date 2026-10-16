@@ -42,8 +42,9 @@ class CorosSyncError(Exception):
 @asynccontextmanager
 async def _mcp_session(access_token: str):
     settings = get_settings()
-    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+    # mcp only closes HTTP clients it creates itself, so this one is closed here.
     async with (
+        httpx2.AsyncClient(headers={"Authorization": f"Bearer {access_token}"}, timeout=30) as http_client,
         streamable_http_client(settings.coros_mcp_server_url, http_client=http_client) as (read, write),
         ClientSession(read, write) as session,
     ):
@@ -314,7 +315,9 @@ async def run_periodic_sync() -> dict[str, int]:
         try:
             await sync_user(user_id, days=PERIODIC_SYNC_WINDOW_DAYS)
             succeeded += 1
-        except CorosSyncError:
+        except Exception:
+            # Not just CorosSyncError: a token refresh (CorosOAuthError) or DB error escapes
+            # sync_user too, and must not skip every user after this one.
             logger.exception("Periodic COROS sync failed for user %s", user_id)
             failed += 1
     return {"synced": succeeded, "failed": failed}

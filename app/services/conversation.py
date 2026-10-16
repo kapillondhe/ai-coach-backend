@@ -40,8 +40,13 @@ class ConversationSummary:
     updated_at: datetime
 
 
-async def create_conversation(user_id: str, *, title: str | None = None) -> str:
-    conversation_id = str(uuid.uuid4())
+def new_conversation_id() -> str:
+    return str(uuid.uuid4())
+
+
+async def create_conversation(user_id: str, *, title: str | None = None, conversation_id: str | None = None) -> str:
+    """Insert a conversation row. Pass `conversation_id` to use an id handed out earlier."""
+    conversation_id = conversation_id or new_conversation_id()
     now = datetime.now(UTC)
     async with get_session() as session:
         await session.execute(

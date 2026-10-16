@@ -60,6 +60,21 @@ class ConnectionStatus:
     connected_at: datetime | None = None
 
 
+def _parse_response(resp: httpx.Response, required_key: str, what: str) -> dict:
+    """The JSON body of a COROS OAuth response, as CorosOAuthError if it's unusable.
+
+    Without this a non-JSON body or a missing field raises KeyError/ValueError, which
+    callers don't treat as an OAuth failure (the callback 500s, refresh skips its fallback).
+    """
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        raise CorosOAuthError(f"{what} returned a non-JSON body: {resp.text[:200]}") from exc
+    if not isinstance(data, dict) or not data.get(required_key):
+        raise CorosOAuthError(f"{what} response has no {required_key}")
+    return data
+
+
 def _generate_pkce_pair() -> tuple[str, str]:
     """Return (code_verifier, code_challenge) per RFC 7636, S256 method."""
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(64)).rstrip(b"=").decode()
@@ -96,7 +111,7 @@ async def _get_or_register_client() -> tuple[str, str | None]:
     if resp.status_code >= 400:
         raise CorosOAuthError(f"COROS client registration failed: {resp.status_code} {resp.text}")
 
-    data = resp.json()
+    data = _parse_response(resp, "client_id", "COROS client registration")
     client_id = data["client_id"]
     client_secret = data.get("client_secret")
 
@@ -186,7 +201,7 @@ async def handle_callback(code: str, state: str) -> str:
     if resp.status_code >= 400:
         raise CorosOAuthError(f"COROS token exchange failed: {resp.status_code} {resp.text}")
 
-    token_data = resp.json()
+    token_data = _parse_response(resp, "access_token", "COROS token exchange")
     access_token = token_data["access_token"]
     refresh_token = token_data.get("refresh_token")
     expires_in = token_data.get("expires_in")
@@ -309,7 +324,7 @@ async def _refresh(user_id: str, refresh_token: str) -> str:
     if resp.status_code >= 400:
         raise CorosOAuthError(f"COROS token refresh failed: {resp.status_code} {resp.text}")
 
-    token_data = resp.json()
+    token_data = _parse_response(resp, "access_token", "COROS token refresh")
     access_token = token_data["access_token"]
     new_refresh_token = token_data.get("refresh_token", refresh_token)
     expires_in = token_data.get("expires_in")

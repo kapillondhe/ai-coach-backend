@@ -250,9 +250,13 @@ def test_signed_in_chat_with_no_conversation_id_creates_one(monkeypatch):
     from app.services import conversation as conversation_service
 
     recording_agent = _RecordingAgent()
-    monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(return_value="conv-new"))
-    append_mock = AsyncMock()
+    calls: list[str] = []
+    monkeypatch.setattr(conversation_service, "new_conversation_id", lambda: "conv-new")
+    create_mock = AsyncMock(side_effect=lambda *a, **k: calls.append("create") or "conv-new")
+    monkeypatch.setattr(conversation_service, "create_conversation", create_mock)
+    append_mock = AsyncMock(side_effect=lambda *a, **k: calls.append("append"))
     monkeypatch.setattr(conversation_service, "append_messages", append_mock)
+    monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", AsyncMock())
 
     app.dependency_overrides[get_coach_agent] = lambda: recording_agent
     app.dependency_overrides[get_current_user_id] = lambda: "user-123"
@@ -265,10 +269,105 @@ def test_signed_in_chat_with_no_conversation_id_creates_one(monkeypatch):
     assert response.status_code == 200
     assert response.json()["conversation_id"] == "conv-new"
     assert recording_agent.received_history == []
-    append_mock.assert_awaited_once()
+    create_mock.assert_awaited_once_with("user-123", conversation_id="conv-new")
+    assert calls == ["create", "append"]
     args = append_mock.await_args.args
     assert args[0] == "conv-new"
     assert args[1] == "user-123"
+
+
+@pytest.mark.parametrize("path", ["/api/coach/chat", "/api/coach/chat/stream"])
+def test_failed_first_turn_creates_no_conversation(monkeypatch, path):
+    """The conversation row is inserted when the turn is saved, so a failed turn leaves none behind."""
+    from app.services import conversation as conversation_service
+
+    create_mock = AsyncMock(return_value="conv-new")
+    monkeypatch.setattr(conversation_service, "create_conversation", create_mock)
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post(path, json={"message": "hi there"})
+    finally:
+        app.dependency_overrides.clear()
+
+    if path.endswith("stream"):
+        assert "event: error" in response.text
+        assert "event: conversation" not in response.text  # no id for a row that doesn't exist
+    else:
+        assert response.status_code == 502
+    create_mock.assert_not_awaited()
+
+
+def test_chat_stream_sends_new_conversation_id_after_the_reply(monkeypatch):
+    from app.services import conversation as conversation_service
+
+    monkeypatch.setattr(conversation_service, "new_conversation_id", lambda: "conv-new")
+    monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(return_value="conv-new"))
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock())
+    monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgent()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat/stream", json={"message": "hello"})
+    finally:
+        app.dependency_overrides.clear()
+
+    text = response.text
+    assert '"conversation_id": "conv-new"' in text
+    assert text.index("echo: hello") < text.index("event: conversation") < text.index("event: done")
+
+
+def test_signed_in_history_is_capped_to_recent_messages(monkeypatch):
+    from app.services import conversation as conversation_service
+
+    recording_agent = _RecordingAgent()
+    turns = [("user" if i % 2 == 0 else "assistant", f"m{i}") for i in range(600)]
+    fake_data = _FakeConversationData("conv-1", turns)
+    monkeypatch.setattr(conversation_service, "get_conversation", AsyncMock(return_value=fake_data))
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = lambda: recording_agent
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        response = client.post("/api/coach/chat", json={"message": "next", "conversation_id": "conv-1"})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    history = recording_agent.received_history
+    assert len(history) == coach_routes._MAX_STORED_HISTORY_MESSAGES
+    assert history[0].parts[0].content == "m560"
+    assert history[-1].parts[0].content == "m599"
+
+
+def test_capped_history_starts_on_a_user_message(monkeypatch):
+    from app.services import conversation as conversation_service
+
+    recording_agent = _RecordingAgent()
+    # 41 messages starting on user: the last 40 would start with an assistant turn (m1).
+    turns = [("user" if i % 2 == 0 else "assistant", f"m{i}") for i in range(41)]
+    monkeypatch.setattr(
+        conversation_service, "get_conversation", AsyncMock(return_value=_FakeConversationData("conv-1", turns))
+    )
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock())
+
+    app.dependency_overrides[get_coach_agent] = lambda: recording_agent
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app)
+        client.post("/api/coach/chat", json={"message": "next", "conversation_id": "conv-1"})
+    finally:
+        app.dependency_overrides.clear()
+
+    history = recording_agent.received_history
+    assert len(history) == 39
+    assert history[0].kind == "request"
 
 
 def test_signed_in_chat_with_existing_conversation_id_loads_history(monkeypatch):
@@ -421,6 +520,7 @@ def test_chat_stream_sends_done_before_the_turn_is_saved(monkeypatch):
         await asyncio.sleep(0.3)
         order.append("saved")
 
+    monkeypatch.setattr(conversation_service, "new_conversation_id", lambda: "conv-new")
     monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(return_value="conv-new"))
     monkeypatch.setattr(conversation_service, "append_messages", _slow_append)
     monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", AsyncMock())

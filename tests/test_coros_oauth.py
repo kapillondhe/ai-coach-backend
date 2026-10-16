@@ -257,3 +257,70 @@ async def test_failed_refresh_of_expired_token_raises(monkeypatch):
 
     with pytest.raises(coros_oauth.CorosOAuthError):
         await coros_oauth.get_access_token("user-123")
+
+
+def _http_response(status_code: int = 200, *, json_body=None, text: str = ""):
+    import httpx
+
+    if json_body is not None:
+        return httpx.Response(status_code, json=json_body)
+    return httpx.Response(status_code, text=text)
+
+
+def _patch_token_endpoint(monkeypatch, response) -> None:
+    client = AsyncMock()
+    client.post.return_value = response
+    client_cls = MagicMock()
+    client_cls.return_value.__aenter__.return_value = client
+    monkeypatch.setattr(coros_oauth.httpx, "AsyncClient", client_cls)
+    monkeypatch.setattr(coros_oauth, "_get_or_register_client", AsyncMock(return_value=("cid", None)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        _http_response(json_body={"error": "weird"}),
+        _http_response(text="<html>oops</html>"),
+        _http_response(json_body=[]),
+    ],
+)
+async def test_refresh_with_unusable_body_raises_coros_oauth_error(monkeypatch, response):
+    _patch_token_endpoint(monkeypatch, response)
+
+    with pytest.raises(coros_oauth.CorosOAuthError, match="COROS token refresh"):
+        await coros_oauth._refresh("user-1", "refresh-token")
+
+
+@pytest.mark.asyncio
+async def test_unusable_early_refresh_body_falls_back_to_current_token(monkeypatch):
+    """A malformed refresh response must reach get_access_token's fallback, not escape as KeyError."""
+    store = _TokenStore(datetime.now(UTC) + timedelta(minutes=2))  # inside the margin, not expired
+    monkeypatch.setattr(coros_oauth, "get_session", store.session)
+    monkeypatch.setattr(coros_oauth, "decrypt_token", lambda v: v)
+    _patch_token_endpoint(monkeypatch, _http_response(json_body={"error": "weird"}))
+
+    assert await coros_oauth.get_access_token("user-1") == "old-access"
+
+
+@pytest.mark.asyncio
+async def test_handle_callback_with_unusable_body_raises_coros_oauth_error(monkeypatch):
+    state_row = {"user_id": "user-1", "code_verifier": "v", "expires_at": datetime.now(UTC) + timedelta(minutes=5)}
+    monkeypatch.setattr(coros_oauth, "get_session", lambda: ScriptedSession(results=[state_row]))
+    _patch_token_endpoint(monkeypatch, _http_response(text="Bad Gateway"))
+
+    with pytest.raises(coros_oauth.CorosOAuthError, match="non-JSON"):
+        await coros_oauth.handle_callback(code="abc", state="s")
+
+
+@pytest.mark.asyncio
+async def test_client_registration_without_client_id_raises_coros_oauth_error(monkeypatch):
+    monkeypatch.setattr(coros_oauth, "get_session", lambda: ScriptedSession(results=[None]))
+    client = AsyncMock()
+    client.post.return_value = _http_response(201, json_body={"client_secret": "s"})
+    client_cls = MagicMock()
+    client_cls.return_value.__aenter__.return_value = client
+    monkeypatch.setattr(coros_oauth.httpx, "AsyncClient", client_cls)
+
+    with pytest.raises(coros_oauth.CorosOAuthError, match="no client_id"):
+        await coros_oauth._get_or_register_client()

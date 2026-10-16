@@ -131,6 +131,12 @@ async def test_create_conversation_returns_new_id(store):
 
 
 @pytest.mark.asyncio
+async def test_create_conversation_uses_a_preassigned_id(store):
+    assert await conversation_service.create_conversation("user-1", conversation_id="conv-early") == "conv-early"
+    assert store["conversations"]["conv-early"]["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
 async def test_append_messages_and_get_conversation_round_trips(store):
     conversation_id = await conversation_service.create_conversation("user-1")
 

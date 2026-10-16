@@ -342,3 +342,69 @@ async def test_get_sync_status_returns_typed_status(monkeypatch):
 
     assert status.status is SyncStatusValue.ERROR
     assert status.status == "error"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [coros_sync.coros_oauth.CorosOAuthError("refresh token expired"), OSError("DB unreachable")],
+)
+async def test_run_periodic_sync_continues_past_non_sync_errors(monkeypatch, error):
+    class _FakeSession(FakeSession):
+        async def handle(self, stmt):
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: ["user-1", "user-2"]))
+
+    monkeypatch.setattr(coros_sync, "get_session", lambda: _FakeSession())
+    calls = []
+
+    async def _sync_user(user_id, *, days, backfill=False):
+        calls.append(user_id)
+        if user_id == "user-1":
+            raise error
+
+    monkeypatch.setattr(coros_sync, "sync_user", _sync_user)
+
+    assert await coros_sync.run_periodic_sync() == {"synced": 1, "failed": 1}
+    assert calls == ["user-1", "user-2"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_session_closes_its_http_client(monkeypatch):
+    """mcp never closes a client passed in, so _mcp_session must close its own."""
+    closed = []
+
+    class _FakeHttpClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            closed.append(True)
+
+    @asynccontextmanager
+    async def _fake_streamable_http_client(url, http_client):
+        assert isinstance(http_client, _FakeHttpClient)
+        yield ("read", "write")
+
+    class _FakeClientSession:
+        def __init__(self, read, write):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return None
+
+        async def initialize(self):
+            return None
+
+    monkeypatch.setattr(coros_sync.httpx2, "AsyncClient", _FakeHttpClient)
+    monkeypatch.setattr(coros_sync, "streamable_http_client", _fake_streamable_http_client)
+    monkeypatch.setattr(coros_sync, "ClientSession", _FakeClientSession)
+
+    async with coros_sync._mcp_session("token"):
+        assert closed == []
+    assert closed == [True]

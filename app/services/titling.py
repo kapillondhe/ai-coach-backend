@@ -18,7 +18,8 @@ _MAX_TITLE_LENGTH = 80
 
 
 def _clean_title(raw: str) -> str:
-    title = raw.strip().strip("\"'").splitlines()[0].strip()
+    lines = raw.strip().strip("\"'").splitlines()
+    title = lines[0].strip() if lines else ""
     if len(title) > _MAX_TITLE_LENGTH:
         title = title[:_MAX_TITLE_LENGTH].rstrip()
     return title

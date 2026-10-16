@@ -34,6 +34,9 @@ _AGENT_UNAVAILABLE_DETAIL = "Coach agent is temporarily unavailable. Please try 
 _MAX_MESSAGE_CHARS = 4000
 _MAX_HISTORY_TURNS = 50
 _MAX_HISTORY_TURN_CHARS = 8000
+# Signed-in history is loaded from the DB, so it is capped here instead: the last 20
+# user/assistant exchanges. Older turns are dropped from the model's context, not deleted.
+_MAX_STORED_HISTORY_MESSAGES = 40
 
 
 class ChatOpenerResponse(BaseModel):
@@ -68,6 +71,8 @@ class ChatResponse(BaseModel):
 class _TurnContext(NamedTuple):
     message_history: list[ModelMessage]
     conversation_id: str | None
+    # A new conversation's id is handed out up front, but its row is only inserted when
+    # the turn is saved, so a failed turn doesn't leave an empty conversation behind.
     is_new_conversation: bool
 
 
@@ -97,10 +102,13 @@ async def _resolve_context(request: ChatRequest, user_id: str | None) -> _TurnCo
             data = await conversation_service.get_conversation(request.conversation_id, user_id)
         except ConversationNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Conversation not found") from exc
-        history = _turns_to_message_history([(m.role, m.content) for m in data.messages])
+        recent = data.messages[-_MAX_STORED_HISTORY_MESSAGES:]
+        if recent and recent[0].role == "assistant":
+            recent = recent[1:]  # start the window on a user message
+        history = _turns_to_message_history([(m.role, m.content) for m in recent])
         return _TurnContext(history, data.id, False)
 
-    return _TurnContext([], await conversation_service.create_conversation(user_id), True)
+    return _TurnContext([], conversation_service.new_conversation_id(), True)
 
 
 async def _start_context_load(
@@ -120,9 +128,13 @@ async def _start_context_load(
     return task
 
 
-async def _persist_turn(user_id: str | None, conversation_id: str | None, user_message: str, reply: str) -> None:
+async def _persist_turn(
+    user_id: str | None, conversation_id: str | None, user_message: str, reply: str, *, is_new_conversation: bool
+) -> None:
     if user_id is None or conversation_id is None:
         return
+    if is_new_conversation:
+        await conversation_service.create_conversation(user_id, conversation_id=conversation_id)
     await conversation_service.append_messages(
         conversation_id,
         user_id,
@@ -139,12 +151,14 @@ _pending_writes: dict[str, asyncio.Task[None]] = {}
 
 
 def _persist_turn_in_background(
-    user_id: str | None, conversation_id: str | None, user_message: str, reply: str
+    user_id: str | None, conversation_id: str | None, user_message: str, reply: str, *, is_new_conversation: bool
 ) -> asyncio.Task[None] | None:
     """Start saving a turn without blocking the stream's `done` event; failures are logged."""
     if user_id is None or conversation_id is None:
         return None
-    task = asyncio.create_task(_persist_turn(user_id, conversation_id, user_message, reply))
+    task = asyncio.create_task(
+        _persist_turn(user_id, conversation_id, user_message, reply, is_new_conversation=is_new_conversation)
+    )
     _pending_writes[conversation_id] = task
 
     def _on_done(t: asyncio.Task[None]) -> None:
@@ -224,7 +238,7 @@ async def chat(
         reply = result.output.reply
         suggestions = result.output.suggestions
 
-    await _persist_turn(user_id, conversation_id, request.message, reply)
+    await _persist_turn(user_id, conversation_id, request.message, reply, is_new_conversation=is_new_conversation)
     _schedule_titling(background_tasks, user_id, conversation_id, request.message, is_new_conversation)
     return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=suggestions)
 
@@ -243,7 +257,9 @@ async def chat_stream(
     async def event_generator() -> AsyncIterator[str]:
         write: asyncio.Task[None] | None = None
         try:
-            if conversation_id:
+            # An existing conversation's id is sent first; a new one's only once the reply
+            # succeeded (below), so a failed turn never hands the client an id with no row.
+            if conversation_id and not is_new_conversation:
                 yield _sse({"conversation_id": conversation_id}, "conversation")
 
             reply, instructions = await _plan_turn(request.message, message_history)
@@ -269,7 +285,11 @@ async def chat_stream(
 
             # Save concurrently with sending the tail events instead of before them, so
             # the client's "loading" state ends ~1s sooner (the DB is a slow round trip).
-            write = _persist_turn_in_background(user_id, conversation_id, request.message, reply)
+            write = _persist_turn_in_background(
+                user_id, conversation_id, request.message, reply, is_new_conversation=is_new_conversation
+            )
+            if conversation_id and is_new_conversation:
+                yield _sse({"conversation_id": conversation_id}, "conversation")
             _schedule_titling(background_tasks, user_id, conversation_id, request.message, is_new_conversation)
             if suggestions:
                 yield _sse({"suggestions": suggestions}, "suggestions")
