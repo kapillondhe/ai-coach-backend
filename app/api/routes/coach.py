@@ -34,6 +34,7 @@ _AGENT_UNAVAILABLE_DETAIL = "Coach agent is temporarily unavailable. Please try 
 _MAX_MESSAGE_CHARS = 4000
 _MAX_HISTORY_TURNS = 50
 _MAX_HISTORY_TURN_CHARS = 8000
+_MAX_ID_CHARS = 128
 # Signed-in history is loaded from the DB, so it is capped here instead: the last 20
 # user/assistant exchanges. Older turns are dropped from the model's context, not deleted.
 _MAX_STORED_HISTORY_MESSAGES = 40
@@ -57,9 +58,9 @@ class ChatHistoryTurn(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=_MAX_MESSAGE_CHARS)
-    session_id: str | None = None
+    session_id: str | None = Field(default=None, max_length=_MAX_ID_CHARS)
     history: list[ChatHistoryTurn] = Field(default=[], max_length=_MAX_HISTORY_TURNS)
-    conversation_id: str | None = None
+    conversation_id: str | None = Field(default=None, max_length=_MAX_ID_CHARS)
 
 
 class ChatResponse(BaseModel):
@@ -238,7 +239,14 @@ async def chat(
         reply = result.output.reply
         suggestions = result.output.suggestions
 
-    await _persist_turn(user_id, conversation_id, request.message, reply, is_new_conversation=is_new_conversation)
+    try:
+        await _persist_turn(user_id, conversation_id, request.message, reply, is_new_conversation=is_new_conversation)
+    except Exception:
+        # Same as the stream route: the reply is already paid for, so return it unsaved
+        # rather than a 500. A new conversation that failed to save has no row to point at.
+        logger.exception("Failed to persist chat turn for conversation %s", conversation_id)
+        if is_new_conversation:
+            conversation_id, is_new_conversation = None, False
     _schedule_titling(background_tasks, user_id, conversation_id, request.message, is_new_conversation)
     return ChatResponse(reply=reply, conversation_id=conversation_id, suggestions=suggestions)
 

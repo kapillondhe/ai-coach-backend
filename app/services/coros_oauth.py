@@ -5,6 +5,7 @@ import hashlib
 import logging
 import secrets
 import time
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -39,6 +40,8 @@ REGISTRATION_ENDPOINT = f"{ISSUER}/connect/register"
 # within this TTL, and `handle_callback`/`disconnect` below don't need to invalidate
 # it explicitly since the window is short.
 _NOT_CONNECTED_CACHE_TTL = 60.0
+# Expired entries are dropped once the cache grows past this many users.
+_NOT_CONNECTED_CACHE_MAX = 10_000
 _not_connected_cache: dict[str, float] = {}
 
 # Refresh a token that expires within this window, so it can't expire mid-chat.
@@ -46,8 +49,9 @@ REFRESH_MARGIN = timedelta(minutes=5)
 
 # One lock per user so concurrent requests refresh once instead of racing (COROS may
 # rotate refresh tokens, and a losing racer would store a dead one). Per-process
-# only: separate workers/instances can still refresh concurrently.
-_refresh_locks: dict[str, asyncio.Lock] = {}
+# only: separate workers/instances can still refresh concurrently. Weak values: a lock
+# lives while a caller holds or waits on it, so the dict doesn't grow per user forever.
+_refresh_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 class CorosOAuthError(Exception):
@@ -275,6 +279,16 @@ def _needs_refresh(row: Row) -> bool:
     )
 
 
+def _remember_not_connected(user_id: str) -> None:
+    now = time.monotonic()
+    if len(_not_connected_cache) >= _NOT_CONNECTED_CACHE_MAX:
+        for uid in [u for u, at in _not_connected_cache.items() if now - at >= _NOT_CONNECTED_CACHE_TTL]:
+            del _not_connected_cache[uid]
+        if len(_not_connected_cache) >= _NOT_CONNECTED_CACHE_MAX:
+            _not_connected_cache.clear()  # all fresh: dropping them only costs a DB read each
+    _not_connected_cache[user_id] = now
+
+
 async def get_access_token(user_id: str) -> str | None:
     """Return a usable (refreshing if needed) access token for this user's COROS connection, or None if not connected."""
     cached_at = _not_connected_cache.get(user_id)
@@ -283,12 +297,13 @@ async def get_access_token(user_id: str) -> str | None:
 
     row = await _load_token_row(user_id)
     if row is None:
-        _not_connected_cache[user_id] = time.monotonic()
+        _remember_not_connected(user_id)
         return None
     if not _needs_refresh(row):
         return decrypt_token(row.access_token_encrypted)
 
-    async with _refresh_locks.setdefault(user_id, asyncio.Lock()):
+    lock = _refresh_locks.setdefault(user_id, asyncio.Lock())  # strong ref held for the block
+    async with lock:
         # Re-read inside the lock: if another request refreshed while we waited,
         # use its new token rather than spending the (possibly rotated) refresh token again.
         row = await _load_token_row(user_id)

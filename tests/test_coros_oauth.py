@@ -324,3 +324,23 @@ async def test_client_registration_without_client_id_raises_coros_oauth_error(mo
 
     with pytest.raises(coros_oauth.CorosOAuthError, match="no client_id"):
         await coros_oauth._get_or_register_client()
+
+
+@pytest.mark.asyncio
+async def test_refresh_lock_is_dropped_once_no_caller_holds_it(monkeypatch):
+    import gc
+
+    _install_token_store(monkeypatch, datetime.now(UTC) + timedelta(minutes=2))
+
+    assert await coros_oauth.get_access_token("user-123") == "new-access"
+    gc.collect()
+    assert "user-123" not in coros_oauth._refresh_locks
+
+
+def test_not_connected_cache_stays_bounded(monkeypatch):
+    monkeypatch.setattr(coros_oauth, "_NOT_CONNECTED_CACHE_MAX", 3)
+    for i in range(10):
+        coros_oauth._remember_not_connected(f"user-{i}")
+
+    assert len(coros_oauth._not_connected_cache) <= 3
+    assert "user-9" in coros_oauth._not_connected_cache

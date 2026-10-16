@@ -11,7 +11,8 @@ jobs:
     steps:
       - name: Call /internal/sync/run
         run: |
-          status=$(curl -s -o /tmp/sync_response.json -w "%{http_code}" \
+          # --max-time: the endpoint syncs every user inline, so bound a hung run.
+          status=$(curl -s --max-time 600 -o /tmp/sync_response.json -w "%{http_code}" \
             -X POST "https://ai-coach-backend.fastapicloud.dev/api/internal/sync/run" \
             -H "X-Internal-Sync-Secret: ${{ secrets.INTERNAL_SYNC_SECRET }}")
           echo "HTTP status: $status"

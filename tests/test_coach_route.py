@@ -781,3 +781,42 @@ def test_off_topic_short_circuit_ignores_selected_playbooks(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["reply"] == coach_routes.scope_service.OFF_TOPIC_RESPONSE
+
+
+@pytest.mark.parametrize("field", ["session_id", "conversation_id"])
+def test_chat_rejects_oversized_ids(field):
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeFailingAgent()
+    try:
+        response = TestClient(app).post("/api/coach/chat", json={"message": "hi", field: "x" * 10_000})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(("conversation_id", "expected_id"), [(None, None), ("conv-1", "conv-1")])
+def test_chat_returns_the_reply_when_saving_the_turn_fails(monkeypatch, conversation_id, expected_id):
+    """The model run is already paid for: a DB failure must not turn the reply into a 500."""
+    from app.services import conversation as conversation_service
+
+    monkeypatch.setattr(conversation_service, "create_conversation", AsyncMock(side_effect=RuntimeError("DB down")))
+    monkeypatch.setattr(
+        conversation_service, "get_conversation", AsyncMock(return_value=_FakeConversationData("conv-1", []))
+    )
+    monkeypatch.setattr(conversation_service, "append_messages", AsyncMock(side_effect=RuntimeError("DB down")))
+    title_mock = AsyncMock()
+    monkeypatch.setattr(coach_routes.titling_service, "generate_and_set_title", title_mock)
+
+    app.dependency_overrides[get_coach_agent] = lambda: _FakeAgent()
+    app.dependency_overrides[get_current_user_id] = lambda: "user-123"
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.post("/api/coach/chat", json={"message": "hello", "conversation_id": conversation_id})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "echo: hello"
+    # A new conversation that failed to save has no row, so no id (and no titling) for it.
+    assert response.json()["conversation_id"] == expected_id
+    title_mock.assert_not_awaited()

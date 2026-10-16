@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # (else per client IP); 0 disables. Enforced in-process, so each worker counts
     # separately (app/core/rate_limit.py).
     chat_rate_limit_per_minute: int = 20
+    # Proxies in front of the app that append to X-Forwarded-For (FastAPI Cloud: 1). The
+    # anonymous rate-limit key is the entry this many places from the right; entries
+    # further left are client-supplied. 0 ignores the header.
+    trusted_proxy_hops: int = 1
 
     phoenix_api_key: str | None = None
     phoenix_collector_endpoint: str = "https://app.phoenix.arize.com"

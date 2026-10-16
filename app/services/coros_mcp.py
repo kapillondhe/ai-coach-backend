@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import logging
 import time
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,7 +37,8 @@ class _Entry:
 
 
 _sessions: dict[str, _Entry] = {}
-_locks: dict[str, asyncio.Lock] = {}
+# Weak values: a lock lives while a caller holds or waits on it, then drops out.
+_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 # Strong refs to in-flight background closes so they aren't garbage-collected.
 _closing: set[asyncio.Task[None]] = set()
 

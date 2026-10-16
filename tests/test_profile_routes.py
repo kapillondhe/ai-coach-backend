@@ -100,3 +100,35 @@ def test_profile_routes_require_sign_in_without_dependency_override():
     client = TestClient(app)
     assert client.get("/api/profile").status_code == 401
     assert client.patch("/api/profile", json={"name": "x"}).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"weight_kg": -40},
+        {"weight_kg": 0},
+        {"weight_kg": 1000},
+        {"name": "x" * 200_000},
+        {"injury_notes": "x" * 20_000},
+    ],
+)
+def test_patch_profile_rejects_out_of_range_values(monkeypatch, body):
+    mock_update = AsyncMock()
+    monkeypatch.setattr(profile_routes.profile_service, "update_profile", mock_update)
+    from fastapi.testclient import TestClient
+
+    response = TestClient(app).patch("/api/profile", json=body)
+
+    assert response.status_code == 422
+    mock_update.assert_not_awaited()
+
+
+def test_patch_profile_accepts_null_to_clear_a_field(monkeypatch):
+    mock_update = AsyncMock(return_value=_sample_data())
+    monkeypatch.setattr(profile_routes.profile_service, "update_profile", mock_update)
+    from fastapi.testclient import TestClient
+
+    response = TestClient(app).patch("/api/profile", json={"weight_kg": None})
+
+    assert response.status_code == 200
+    mock_update.assert_awaited_once_with("user-123", {"weight_kg": None}, source="user")

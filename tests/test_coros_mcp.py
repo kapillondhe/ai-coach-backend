@@ -179,3 +179,14 @@ async def test_close_all_closes_everything(_fake_open):
 
     assert coros_mcp._sessions == {}
     assert all(t.exited == 1 for t in _FakeMCPToolset.instances)
+
+
+@pytest.mark.asyncio
+async def test_per_user_lock_is_dropped_once_no_caller_holds_it(_fake_open):
+    import gc
+
+    await coros_mcp.get_toolset("u1", "tok")
+    gc.collect()
+
+    assert "u1" not in coros_mcp._locks
+    assert "u1" in coros_mcp._sessions  # the pooled session itself stays

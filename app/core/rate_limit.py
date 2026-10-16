@@ -68,17 +68,20 @@ chat_limiter = SlidingWindowLimiter()
 
 
 def client_ip(request: Request) -> str:
-    """The caller's IP: left-most X-Forwarded-For entry when present, else the socket peer.
+    """The caller's IP as seen by our own proxy: the X-Forwarded-For entry
+    `trusted_proxy_hops` places from the right, else the socket peer.
 
-    The app runs behind FastAPI Cloud's proxy, where `request.client.host` is the proxy
-    for every caller. The left-most entry is client-supplied and therefore spoofable; it
-    is good enough to separate ordinary anonymous users, not to stop a determined one.
+    FastAPI Cloud's proxy appends the connecting IP and keeps whatever the client sent,
+    so the left-most entries are client-controlled: rotating them used to give a fresh
+    bucket per request. Don't use `request.client.host` either when the header is
+    present: prod's uvicorn trusts all proxies and sets it to the left-most entry.
     """
+    hops = get_settings().trusted_proxy_hops
     forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first
+    if forwarded and hops > 0:
+        entries = [entry.strip() for entry in forwarded.split(",") if entry.strip()]
+        if len(entries) >= hops:
+            return entries[-hops]
     return request.client.host if request.client else "unknown"
 
 

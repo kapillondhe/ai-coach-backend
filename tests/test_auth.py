@@ -108,3 +108,34 @@ def test_chat_route_works_anonymously_without_authorization_header(monkeypatch):
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
+
+
+def _jwks_down(monkeypatch):
+    def _get_signing_key_from_jwt(token):
+        raise jwt.PyJWKClientConnectionError("Fail to fetch data from the url")
+
+    fake_jwks_client = MagicMock()
+    fake_jwks_client.get_signing_key_from_jwt.side_effect = _get_signing_key_from_jwt
+    monkeypatch.setattr(auth_module, "_jwks_client", lambda supabase_url: fake_jwks_client)
+
+
+def test_jwks_outage_is_a_503_not_a_silent_sign_out(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    _jwks_down(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_user_id(_request({"authorization": "Bearer a.valid.jwt"}))
+    assert exc_info.value.status_code == 503
+
+
+def test_jwks_outage_returns_503_from_a_signed_in_route(monkeypatch, caplog):
+    from app.main import app
+
+    monkeypatch.setenv("SUPABASE_URL", "https://project.supabase.co")
+    _jwks_down(monkeypatch)
+
+    with caplog.at_level("WARNING", logger="app.core.auth"):
+        response = TestClient(app).get("/api/profile", headers={"Authorization": "Bearer a.valid.jwt"})
+
+    assert response.status_code == 503
+    assert any(r.levelname == "WARNING" and "JWKS" in r.getMessage() for r in caplog.records)

@@ -77,14 +77,46 @@ def test_cross_origin_429_exposes_retry_after_to_the_browser(monkeypatch):
     assert "retry-after" in response.headers["access-control-expose-headers"].lower()
 
 
-def test_rate_limit_is_per_forwarded_ip(monkeypatch):
+def test_rate_limit_is_per_proxy_appended_ip(monkeypatch):
     _set_limit(monkeypatch, 1)
     client = TestClient(app)
 
-    assert _post(client, **{"X-Forwarded-For": "1.1.1.1, 10.0.0.1"}).status_code == 200
-    # Same left-most client, different proxy hop: same bucket.
-    assert _post(client, **{"X-Forwarded-For": "1.1.1.1, 10.0.0.2"}).status_code == 429
+    assert _post(client, **{"X-Forwarded-For": "1.1.1.1"}).status_code == 200
+    assert _post(client, **{"X-Forwarded-For": "1.1.1.1"}).status_code == 429
+    assert _post(client, **{"X-Forwarded-For": "2.2.2.2"}).status_code == 200
+
+
+def test_rotating_client_supplied_forwarded_for_does_not_bypass_the_limit(monkeypatch):
+    """FastAPI Cloud keeps client-sent entries and appends the real IP on the right
+    (verified on prod: 23/23 rotated left-most entries got through at limit 20)."""
+    _set_limit(monkeypatch, 2)
+    client = TestClient(app)
+
+    codes = [_post(client, **{"X-Forwarded-For": f"10.77.{i}.{i}, 1.1.1.1"}).status_code for i in range(6)]
+
+    assert codes == [200, 200, 429, 429, 429, 429]
+
+
+def test_trusted_proxy_hops_picks_the_entry_from_the_right(monkeypatch):
+    _set_limit(monkeypatch, 1)
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "2")
+    get_settings.cache_clear()
+    client = TestClient(app)
+
+    # Two proxies: the client is second from the right; the last entry is our first proxy.
+    assert _post(client, **{"X-Forwarded-For": "6.6.6.6, 1.1.1.1, 10.0.0.1"}).status_code == 200
+    assert _post(client, **{"X-Forwarded-For": "7.7.7.7, 1.1.1.1, 10.0.0.2"}).status_code == 429
     assert _post(client, **{"X-Forwarded-For": "2.2.2.2, 10.0.0.1"}).status_code == 200
+
+
+def test_trusted_proxy_hops_zero_ignores_forwarded_for(monkeypatch):
+    _set_limit(monkeypatch, 1)
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "0")
+    get_settings.cache_clear()
+    client = TestClient(app, client=("3.3.3.3", 1))
+
+    assert _post(client, **{"X-Forwarded-For": "1.1.1.1"}).status_code == 200
+    assert _post(client, **{"X-Forwarded-For": "2.2.2.2"}).status_code == 429
 
 
 def test_rate_limit_falls_back_to_client_host_without_forwarded_for(monkeypatch):

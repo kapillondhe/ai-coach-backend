@@ -1,3 +1,4 @@
+import hmac
 import logging
 
 from fastapi import APIRouter, Header, HTTPException
@@ -21,7 +22,9 @@ async def run_sync(x_internal_sync_secret: str | None = Header(default=None)) ->
     settings = get_settings()
     if not settings.internal_sync_secret:
         raise HTTPException(status_code=503, detail="Internal sync is not configured")
-    if x_internal_sync_secret != settings.internal_sync_secret:
+    if not x_internal_sync_secret or not hmac.compare_digest(
+        x_internal_sync_secret.encode(), settings.internal_sync_secret.encode()
+    ):
         raise HTTPException(status_code=401, detail="Invalid sync secret")
 
     result = await coros_sync.run_periodic_sync()

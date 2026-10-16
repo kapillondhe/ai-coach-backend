@@ -23,6 +23,11 @@ def _verify(token: str, supabase_url: str, audience: str) -> str | None:
             algorithms=["ES256", "RS256"],
             audience=audience,
         )
+    except jwt.PyJWKClientConnectionError as exc:
+        # Our key fetch failed, not the token: treating this as anonymous would silently
+        # sign every user out (and save nothing) for the whole outage.
+        logger.warning("Could not fetch Supabase JWKS to verify a token: %s", exc)
+        raise HTTPException(status_code=503, detail="Sign-in is temporarily unavailable. Please try again.") from exc
     except jwt.PyJWTError:
         logger.info("Rejected invalid/expired Supabase JWT; proceeding as anonymous", exc_info=True)
         return None
