@@ -435,7 +435,7 @@ async def test_profile_tool_reaches_the_model_with_description_and_params(monkey
 
 
 @pytest.mark.asyncio
-async def test_profile_tool_saves_stated_fields_with_coach_source(monkeypatch):
+async def test_profile_tool_saves_stated_fields_with_chat_source(monkeypatch):
     update_mock = AsyncMock()
     monkeypatch.setattr(coach_agent.profile_service, "update_profile", update_mock)
     tool = await _profile_tool(monkeypatch)
@@ -443,7 +443,7 @@ async def test_profile_tool_saves_stated_fields_with_coach_source(monkeypatch):
     result = await tool.function(weight_kg=72.0, injury_notes="  Sore left Achilles ")
 
     update_mock.assert_awaited_once_with(
-        "user-123", {"weight_kg": 72.0, "injury_notes": "Sore left Achilles"}, source="coach"
+        "user-123", {"weight_kg": 72.0, "injury_notes": "Sore left Achilles"}, source="chat"
     )
     assert "weight_kg" in result
 
@@ -471,4 +471,4 @@ async def test_profile_tool_can_clear_injury_notes(monkeypatch):
 
     await tool.function(injury_notes="")
 
-    update_mock.assert_awaited_once_with("user-123", {"injury_notes": None}, source="coach")
+    update_mock.assert_awaited_once_with("user-123", {"injury_notes": None}, source="chat")

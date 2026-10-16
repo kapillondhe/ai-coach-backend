@@ -165,10 +165,10 @@ async def test_get_profile_is_read_only_and_none_when_absent(store, log):
 
 @pytest.mark.asyncio
 async def test_get_profile_returns_stored_fields(store):
-    await profile_service.update_profile("user-1", {"weight_kg": 70.0}, source="coach")
+    await profile_service.update_profile("user-1", {"weight_kg": 70.0}, source="chat")
 
     data = await profile_service.get_profile("user-1")
 
     assert data is not None
     assert data.weight_kg == 70.0
-    assert data.field_sources == {"weight_kg": "coach"}
+    assert data.field_sources == {"weight_kg": "chat"}

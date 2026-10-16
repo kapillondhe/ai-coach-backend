@@ -283,7 +283,7 @@ async def get_coach_agent(user_id: str | None = Depends(get_current_user_id)) ->
                 updates["injury_notes"] = injury_notes.strip() or None
             if not updates:
                 raise ModelRetry("Pass at least one of `name`, `weight_kg` or `injury_notes`.")
-            await profile_service.update_profile(user_id, updates, source="coach")
+            await profile_service.update_profile(user_id, updates, source="chat")
             return f"Saved to profile: {', '.join(sorted(updates))}."
 
     return agent
